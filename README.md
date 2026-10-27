@@ -55,6 +55,8 @@ Cloud mode is **optional and off by default**. If you use it:
 - Without an approval for the index the program aborts **before every call**; nothing is sent, and the message explains how to approve.
 - Switching the index or the model ends the conversation (the history is dropped) so that excerpts of a local index cannot end up in a cloud request.
 - A missing API key also aborts before anything is sent.
+- **Keys and credentials check:** before an index is approved, and again at the first cloud question of every session, the program counts the documents that look like keys or credentials (private key headers such as `BEGIN RSA PRIVATE KEY`, secret names such as `api_key` or `client_secret`, filenames such as `*.pem`, `*credential*`). The check only **counts** and never shows values. If something is found, the window asks "Send text excerpts to the cloud anyway?" (default: no); on the command line `--allow-cloud` and `--provider anthropic` stop with the counts unless you add `--ignore-secret-warning`. It is a heuristic and can miss secrets or flag harmless files, so treat it as a safety net, not a guarantee.
+- **Refusals:** the provider's own safety filters can block answers about keys and tokens. The program then reports "declined to answer" together with the tool results instead of retrying, and suggests the local model.
 
 **What you have to decide yourself:** before approving an index, check whether you may pass the content to a service provider (data protection, confidentiality, the provider's terms). If an index contains credentials, keys or particularly sensitive data, do **not** approve it – load such collections into their own index (window: tab "Index", field "Index") that stays blocked. Providers may process and retain requests according to their terms; check them with the provider. Cloud mode incurs **costs** per token; questions that need many tool steps cost more.
 
@@ -318,6 +320,7 @@ docsearch/
 │   ├── es.py               Elasticsearch client and index mapping
 │   ├── llm.py              LLM clients: local (OpenAI-compatible) and cloud (Anthropic)
 │   ├── cloud_policy.py     per-index approval for the cloud (cloud_indices.json)
+│   ├── secrets_check.py    counts documents that look like keys/credentials (cloud safeguard)
 │   ├── services.py         check and start the Docker services (first-run setup)
 │   ├── indexing.py         pipeline file -> Tika -> Elasticsearch
 │   ├── tools.py            tools of the agent (+ description for the model)

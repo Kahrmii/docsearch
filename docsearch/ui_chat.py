@@ -6,9 +6,9 @@ import re
 import subprocess
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
-from . import agent, cloud_policy, llm, tools
+from . import agent, cloud_policy, llm, secrets_check, tools
 from .es import Es, EsError
 
 # Only these file types are opened directly; everything else is shown in the file explorer.
@@ -37,6 +37,7 @@ class ChatTab(ttk.Frame):
         self.es = None
         self.link_count = 0
         self.last_target = None  # (index, provider) of the last question: the history is dropped when it changes
+        self.cloud_confirmed = set()  # indices the user accepted for the cloud despite a secrets warning
 
         bar = ttk.Frame(self)
         bar.pack(fill="x")
@@ -94,7 +95,31 @@ class ChatTab(ttk.Frame):
         self.cloud_ok.set(cloud_policy.is_allowed(self.index.get().strip().lower()))
 
     def toggle_cloud(self):
-        cloud_policy.set_allowed(self.index.get().strip().lower(), self.cloud_ok.get())
+        index = self.index.get().strip().lower()
+        if self.cloud_ok.get() and not self.confirm_cloud(index):
+            self.cloud_ok.set(False)
+            return
+        cloud_policy.set_allowed(index, self.cloud_ok.get())
+
+    def confirm_cloud(self, index):
+        """True if sending excerpts of this index to the cloud is fine: nothing suspicious found, or the user
+        confirmed after a warning. The check only counts documents; it never shows secret values."""
+        if index in self.cloud_confirmed:
+            return True
+        try:
+            findings = secrets_check.scan(self._es(), index)
+        except (EsError, SystemExit, OSError) as e:
+            self.write(f"Could not check the index for keys and credentials ({e}); nothing was sent.\n\n", "error")
+            return False
+        if not secrets_check.risky(findings):
+            self.cloud_confirmed.add(index)
+            return True
+        if messagebox.askyesno("Keys or credentials in this index?",
+                               secrets_check.describe(index, findings) + "\n\nSend text excerpts to the cloud anyway?",
+                               icon="warning", default="no"):
+            self.cloud_confirmed.add(index)
+            return True
+        return False
 
     # ---- Index selection
     def _es(self):
@@ -159,6 +184,10 @@ class ChatTab(ttk.Frame):
         if provider != "local" and not cloud_policy.is_allowed(index):
             self.write(f"Index '{index}' is not approved for the cloud; nothing was sent. "
                        "Tick 'Allow cloud for this index' or choose the local model.\n\n", "error")
+            return
+        if provider != "local" and not self.confirm_cloud(index):
+            self.write("Cancelled: nothing was sent to the cloud. Choose the local model for this index.\n\n",
+                       "error")
             return
         self.entry.delete(0, "end")
         self.settings.update(chat_index=index, chat_provider=provider)

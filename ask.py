@@ -11,7 +11,7 @@ import argparse
 import json
 import sys
 
-from docsearch import agent, cloud_policy, config, llm, tools
+from docsearch import agent, cloud_policy, config, llm, secrets_check, tools
 from docsearch.es import Es, EsError
 from docsearch.llm import LlmError
 
@@ -24,11 +24,23 @@ def main():
                     help="local = local model, anthropic = Claude in the cloud (default: LLM_PROVIDER or local)")
     ap.add_argument("--allow-cloud", action="store_true", help="approve the index for the cloud (stays saved)")
     ap.add_argument("--deny-cloud", action="store_true", help="withdraw the cloud approval of the index")
+    ap.add_argument("--ignore-secret-warning", action="store_true",
+                    help="use the cloud even if the index looks like it contains keys or credentials")
     args = ap.parse_args()
     index = args.index.strip().lower()
     config.ensure_env()
+    es = Es()
+
+    def check_secrets():
+        """Stop if the index looks like it holds keys or credentials (unless explicitly overridden)."""
+        findings = secrets_check.scan(es, index)
+        if secrets_check.risky(findings) and not args.ignore_secret_warning:
+            sys.exit(secrets_check.describe(index, findings)
+                     + "\nNothing was sent. Use --ignore-secret-warning to proceed anyway.")
 
     if args.allow_cloud or args.deny_cloud:
+        if args.allow_cloud:
+            check_secrets()
         cloud_policy.set_allowed(index, args.allow_cloud)
         print(f"Index '{index}': cloud {'approved' if args.allow_cloud else 'blocked'}.")
         if not args.question:
@@ -37,7 +49,8 @@ def main():
         client = llm.get_client(args.provider, index)
     except LlmError as e:
         sys.exit(str(e))
-    es = Es()
+    if client.cloud:
+        check_secrets()
     ctx_chars = client.context_chars()
     history = []
 
