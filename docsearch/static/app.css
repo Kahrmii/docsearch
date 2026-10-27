@@ -52,4 +52,15 @@ progress { width: 100%; height: 14px; }
 .danger-zone { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 8px; }
 button.danger { color: var(--error); border-color: var(--error); }
 button.danger:hover:not(:disabled) { background: var(--error); color: #ffffff; }
+#status-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+#status-list li { display: flex; gap: 12px; padding: 8px 12px; border: 1px solid var(--line); border-left-width: 5px;
+                  border-radius: 6px; background: var(--panel); }
+#status-list li strong { min-width: 130px; }
+#status-list li.ok { border-left-color: #2e9d57; }
+#status-list li.warn { border-left-color: #d89a00; }
+#status-list li.error { border-left-color: var(--error); }
+.setting { display: grid; grid-template-columns: 220px minmax(180px, 320px); gap: 2px 14px; align-items: center;
+           padding: 8px 0; border-bottom: 1px solid var(--line); }
+.setting .muted { grid-column: 2; }
+@media (max-width: 640px) { .setting { grid-template-columns: 1fr; } .setting .muted { grid-column: 1; } }
 @media (max-width: 640px) { .row .right { margin-left: 0; } main { padding: 12px; } }

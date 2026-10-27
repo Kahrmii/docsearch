@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from . import config, mbox, services
@@ -30,11 +30,11 @@ class Options:
     limit: Optional[int] = None      # only N files that are not indexed yet
     random: bool = False             # random sample instead of the first N
     seed: int = 42
-    workers: int = 4                 # parallel Tika requests (mind Tika's memory)
-    batch_size: int = 50
+    workers: int = field(default_factory=lambda: config.INDEX_WORKERS)  # parallel Tika requests (mind its memory)
+    batch_size: int = field(default_factory=lambda: config.INDEX_BATCH_SIZE)
     timeout: int = 300               # seconds per file
     max_chars: int = 10_000_000      # truncate text per document
-    max_file_mb: int = 100           # skip larger files (0 = no limit)
+    max_file_mb: int = field(default_factory=lambda: config.MAX_FILE_MB)  # skip larger files (0 = no limit)
     skip_failed: bool = False
     skip_duplicates: bool = True     # same file content / same mail (Message-ID) is indexed only once
     dry_run: bool = False

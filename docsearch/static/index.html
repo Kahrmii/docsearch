@@ -16,6 +16,8 @@
   <nav>
     <button id="tab-ask" class="tab active" type="button">Ask</button>
     <button id="tab-index" class="tab" type="button">Index</button>
+    <button id="tab-status" class="tab" type="button">Status</button>
+    <button id="tab-settings" class="tab" type="button">Settings</button>
   </nav>
 
   <main>
@@ -56,6 +58,23 @@
         <label>Delete an index <select id="delete-index"></select></label>
         <button id="index-delete" type="button" class="danger">Delete index ...</button>
       </div>
+    </section>
+
+    <section id="panel-status" hidden>
+      <div class="row">
+        <button id="status-refresh" type="button">Refresh</button>
+        <span id="status-note" class="muted"></span>
+      </div>
+      <ul id="status-list"></ul>
+    </section>
+
+    <section id="panel-settings" hidden>
+      <div id="settings-fields"></div>
+      <div class="row">
+        <button id="settings-save" type="button" class="primary">Save</button>
+        <span id="settings-note" class="muted"></span>
+      </div>
+      <p class="muted">Saved to the .env file and applied at once. Passwords and API keys are not editable here.</p>
     </section>
   </main>
 

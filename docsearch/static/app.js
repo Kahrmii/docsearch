@@ -37,13 +37,78 @@
 
   // ---- tabs
   function showTab(name) {
-    for (const tab of ["ask", "index"]) {
+    for (const tab of ["ask", "index", "status", "settings"]) {
       $("panel-" + tab).hidden = tab !== name;
       $("tab-" + tab).classList.toggle("active", tab === name);
     }
+    if (name === "status") loadStatus();
+    if (name === "settings") loadSettings();
   }
   $("tab-ask").addEventListener("click", () => showTab("ask"));
   $("tab-index").addEventListener("click", () => showTab("index"));
+  $("tab-status").addEventListener("click", () => showTab("status"));
+  $("tab-settings").addEventListener("click", () => showTab("settings"));
+
+  // ---- status (health overview)
+  async function loadStatus() {
+    $("status-note").textContent = "Checking ...";
+    $("status-refresh").disabled = true;
+    const { ok, data } = await api("/api/health");
+    $("status-refresh").disabled = false;
+    if (!ok) { $("status-note").textContent = (data && data.error) || "Could not check."; return; }
+    $("status-note").textContent = "docsearch " + data.version;
+    $("status-list").replaceChildren(...data.checks.map((c) => {
+      const item = document.createElement("li");
+      item.className = c.status;
+      const name = document.createElement("strong");
+      name.textContent = c.name;
+      const detail = document.createElement("span");
+      detail.textContent = c.detail;
+      item.append(name, detail);
+      return item;
+    }));
+  }
+  $("status-refresh").addEventListener("click", loadStatus);
+
+  // ---- settings
+  let settingFields = [];
+  async function loadSettings() {
+    const { ok, data } = await api("/api/settings");
+    if (!ok) { $("settings-note").textContent = (data && data.error) || "Could not load the settings."; return; }
+    settingFields = data.fields;
+    $("settings-fields").replaceChildren(...settingFields.map((f) => {
+      const row = document.createElement("div");
+      row.className = "setting";
+      const label = document.createElement("label");
+      label.textContent = f.label;
+      let input;
+      if (f.kind === "choice") {
+        input = document.createElement("select");
+        fillSelect(input, f.choices.map((c) => [c, c]), f.value);
+      } else {
+        input = document.createElement("input");
+        input.type = f.kind === "bool" ? "checkbox" : "text";
+        if (f.kind === "bool") input.checked = Boolean(f.value); else input.value = f.value;
+      }
+      input.id = "setting-" + f.key;
+      label.htmlFor = input.id;
+      const help = document.createElement("div");
+      help.className = "muted";
+      help.textContent = f.help + (f.env_override ? " (An environment variable overrides this on the next start.)" : "");
+      row.append(label, input, help);
+      return row;
+    }));
+    $("settings-note").textContent = "";
+  }
+  $("settings-save").addEventListener("click", async () => {
+    const changes = {};
+    for (const f of settingFields) {
+      const input = $("setting-" + f.key);
+      changes[f.key] = f.kind === "bool" ? input.checked : input.value;
+    }
+    const { ok, data } = await api("/api/settings/save", changes);
+    $("settings-note").textContent = ok ? "Saved." : ((data && data.error) || "Could not save.");
+  });
 
   // ---- state (indices, models, Docker status)
   function fillSelect(select, options, selected) {

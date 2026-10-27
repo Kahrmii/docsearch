@@ -12,6 +12,7 @@ from docsearch import __version__, config, services
 from docsearch.ui_chat import ChatTab
 from docsearch.ui_common import Settings
 from docsearch.ui_index import IndexTab
+from docsearch.ui_status import SettingsTab, StatusTab
 
 
 class App(tk.Tk):
@@ -31,6 +32,11 @@ class App(tk.Tk):
                                  on_deleted=self.chat.index_deleted)
         notebook.add(self.indexing, text="Index")
         notebook.add(self.chat, text="Ask")
+        self.status = StatusTab(notebook)
+        notebook.add(self.status, text="Status")
+        notebook.add(SettingsTab(notebook), text="Settings")
+        notebook.bind("<<NotebookTabChanged>>", lambda e: self.status.refresh()
+                      if notebook.select() == str(self.status) else None)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.q = queue.Queue()

@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from docsearch import chat as chat_module
-from docsearch import cloud_policy, files, indexing, secrets_check, ui_common, webserver
+from docsearch import cloud_policy, config, files, health, indexing, preferences, secrets_check, ui_common, webserver
 
 
 class FakeEs:
@@ -336,6 +336,45 @@ class IndexDeleteTest(WebTestCase):
                                     token=False)
         self.assertEqual(status, 403)
         self.assertEqual(self.state._es.deleted, [])
+
+
+class StatusAndSettingsTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        env = Path(self.tmp.name) / ".env"
+        env.write_text("ELASTIC_PASSWORD=abc\n", encoding="utf-8")
+        for patcher in (mock.patch.object(config, "ENV_FILE", env), mock.patch.object(config, "_file_cache", None)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for field in preferences.FIELDS:  # restore the running configuration afterwards
+            self.addCleanup(setattr, config, field["key"], getattr(config, field["key"]))
+        self.start_server()
+
+    def test_health_lists_the_checks(self):
+        checks = [{"name": "Tika", "status": "ok", "detail": "fine"}]
+        with mock.patch.object(health, "run_checks", return_value=checks):
+            status, data, _ = self.request("GET", "/api/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["checks"], checks)
+        self.assertTrue(data["version"])
+
+    def test_settings_can_be_read_and_saved(self):
+        status, data, _ = self.request("GET", "/api/settings")
+        self.assertEqual(status, 200)
+        self.assertIn("OCR_LANGUAGES", [f["key"] for f in data["fields"]])
+        status, _, _ = self.request("POST", "/api/settings/save", {"OCR_LANGUAGES": "deu+eng", "INDEX_WORKERS": "3"})
+        self.assertEqual(status, 200)
+        self.assertEqual((config.OCR_LANGUAGES, config.INDEX_WORKERS), ("deu+eng", 3))
+
+    def test_invalid_settings_and_secrets_are_refused(self):
+        for body in ({"INDEX_WORKERS": "99"}, {"ELASTIC_PASSWORD": "x"}, {"ANTHROPIC_API_KEY": "sk-x"}):
+            self.assertEqual(self.request("POST", "/api/settings/save", body)[0], 400)
+        self.assertEqual(config.get("ELASTIC_PASSWORD"), "abc")
+
+    def test_the_token_is_required(self):
+        self.assertEqual(self.request("GET", "/api/settings", token=False)[0], 403)
+        self.assertEqual(self.request("POST", "/api/settings/save", {"MAX_FILE_MB": "5"}, token=False)[0], 403)
+        self.assertEqual(self.request("GET", "/api/health", token=False)[0], 403)
 
 
 if __name__ == "__main__":

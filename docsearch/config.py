@@ -68,6 +68,47 @@ OCR_LANGUAGES = get("OCR_LANGUAGES", "eng")  # Tesseract languages for scans, e.
 TEXT_ANALYZER = get("TEXT_ANALYZER", "standard")  # Elasticsearch analyzer for new indices, e.g. "german", "english"
 
 
+def _int(name, default):
+    try:
+        return int(get(name, default))
+    except ValueError:
+        return default
+
+
+INDEX_WORKERS = _int("INDEX_WORKERS", 4)          # parallel Tika requests (mind Tika's memory)
+INDEX_BATCH_SIZE = _int("INDEX_BATCH_SIZE", 50)   # files per Elasticsearch write and resume check
+MAX_FILE_MB = _int("MAX_FILE_MB", 100)            # larger files are skipped (0 = no limit)
+
+# settings that can be changed while the program runs (see preferences.py): name -> conversion of the text value
+_CONVERTERS = {"LLM_THINK": lambda v: v == "1", "INDEX_WORKERS": int, "INDEX_BATCH_SIZE": int, "MAX_FILE_MB": int}
+
+
+def write_env_values(values):
+    """Set KEY=value lines in .env (replace the line if there is one, otherwise append). Other lines stay as they are."""
+    ensure_env()
+    global _file_cache
+    lines = ENV_FILE.read_text(encoding="utf-8-sig").splitlines()
+    for key, value in values.items():
+        new = f"{key}={value}"
+        for i, line in enumerate(lines):
+            if line.split("=", 1)[0].strip() == key and not line.lstrip().startswith("#") and "=" in line:
+                lines[i] = new
+                break
+        else:
+            lines.append(new)
+    temp = ENV_FILE.with_name(ENV_FILE.name + ".tmp")
+    temp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(temp, ENV_FILE)
+    _file_cache = None
+
+
+def set_values(values):
+    """Save settings to .env and apply them to the running program. Values are text, already validated."""
+    write_env_values(values)
+    for key, value in values.items():
+        globals()[key] = _CONVERTERS.get(key, str)(value)
+
+
 def elastic_password():
     password = get("ELASTIC_PASSWORD")
     if not password or password == PASSWORD_PLACEHOLDER:

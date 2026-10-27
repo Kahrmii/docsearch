@@ -17,7 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import cloud_policy, config, files, index_admin, indexing, llm, secrets_check, services
+from . import (__version__, cloud_policy, config, files, health, index_admin, indexing, llm, preferences, secrets_check,
+               services)
 from .chat import ChatSession
 from .es import Es, EsError, valid_index_name
 from .ui_common import QueueHandler, Settings
@@ -311,6 +312,22 @@ def api_chat_reset(state, query, body):
     return 200, {"ok": True}
 
 
+def api_health(state, query, body):
+    return 200, {"version": __version__, "checks": health.run_checks()}
+
+
+def api_settings(state, query, body):
+    return 200, {"fields": preferences.current()}
+
+
+def api_settings_save(state, query, body):
+    try:
+        preferences.save(body)
+    except ValueError as e:
+        raise BadRequest(str(e)) from e
+    return 200, {"ok": True}
+
+
 def api_open(state, query, body):
     chat = state.chats.get(_text(body, "chat_id"))
     path = chat.session.sources.get(_text(body, "filename")) if chat else None  # only files named as a source
@@ -333,6 +350,9 @@ ROUTES = {
     ("POST", "/api/chat/stop"): api_chat_stop,
     ("POST", "/api/chat/reset"): api_chat_reset,
     ("POST", "/api/open"): api_open,
+    ("GET", "/api/health"): api_health,
+    ("GET", "/api/settings"): api_settings,
+    ("POST", "/api/settings/save"): api_settings_save,
 }
 
 
