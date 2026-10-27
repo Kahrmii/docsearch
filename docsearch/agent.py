@@ -52,14 +52,39 @@ def trim_messages(messages, budget):
     return messages
 
 
+def _shrink_tool_results(messages, factor):
+    """Cut every long tool result down to `factor` of its length (a model that fails on a long prompt may cope)."""
+    shrunk = []
+    for m in messages:
+        if m["role"] == "tool" and len(m["content"]) > 300:
+            m = {**m, "content": m["content"][:max(200, int(len(m["content"]) * factor))] + " ...[truncated]"}
+        shrunk.append(m)
+    return shrunk
+
+
+def _tool_results(messages):
+    """[(tool name, result text)] of all tool results in the conversation."""
+    names = {c["id"]: c["function"]["name"] for m in messages if m["role"] == "assistant"
+             for c in m.get("tool_calls") or []}
+    return [(names.get(m.get("tool_call_id"), "tool"), m["content"]) for m in messages if m["role"] == "tool"]
+
+
 def _answer_or_fallback(client, messages, budget, used_tools):
-    """The model said nothing: ask once more, otherwise report honestly instead of showing an empty answer."""
-    reply = client.chat(trim_messages(messages + [{"role": "user", "content": EMPTY_ANSWER_NUDGE}], budget))
-    text = llm.clean(reply.get("content"))
-    if text:
-        return text
-    return ("The model returned no answer. Tools used: " + (", ".join(used_tools) or "none")
-            + ". Please rephrase the question.")
+    """The model said nothing. Ask again with more randomness and ever shorter tool results; if it still stays
+    silent, show what the tools returned, so the user always gets something."""
+    for factor, temperature in ((1.0, 0.6), (0.4, 0.3), (0.15, 0.3)):
+        prompt = _shrink_tool_results(messages, factor) + [{"role": "user", "content": EMPTY_ANSWER_NUDGE}]
+        reply = client.chat(trim_messages(prompt, budget), temperature=temperature)
+        text = llm.clean(reply.get("content"))
+        if text:
+            return text
+    lines = ["The model returned no answer. Tools used: " + (", ".join(used_tools) or "none") + "."]
+    results = _tool_results(messages)
+    if results:
+        lines.append("This is what the tools returned:")
+        lines += [f"- {name}: {content[:400]}" for name, content in results]
+    lines.append("Please rephrase the question or try again.")
+    return "\n".join(lines)
 
 
 def ask(question, ctx, client, history=None, on_step=None, max_steps=MAX_STEPS):

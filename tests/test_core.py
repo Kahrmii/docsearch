@@ -1,4 +1,5 @@
 """Tests for the pure functions (no Elasticsearch, Tika or LLM needed): python -m unittest discover -s tests -t ."""
+import json
 import os
 import tempfile
 import unittest
@@ -85,28 +86,60 @@ class PromptTest(unittest.TestCase):
 
 
 class FakeClient:
-    """Returns prepared replies in order."""
+    """Returns prepared replies in order (the last one repeats). A reply is a text or a ready message dict."""
     cloud = False
 
-    def __init__(self, *contents):
-        self.replies = [{"content": c, "tool_calls": []} for c in contents]
+    def __init__(self, *replies):
+        self.replies = [r if isinstance(r, dict) else {"content": r, "tool_calls": []} for r in replies]
+        self.calls = []
 
-    def chat(self, messages, tools=None, max_tokens=1500):
-        return self.replies.pop(0)
+    def chat(self, messages, tools=None, max_tokens=1500, temperature=0.1):
+        self.calls.append({"messages": messages, "temperature": temperature})
+        return self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+
+
+def tool_call_reply(name, arguments):
+    return {"content": "", "tool_calls": [{"id": "c1", "type": "function",
+                                           "function": {"name": name, "arguments": json.dumps(arguments)}}]}
+
+
+class CountingEs:
+    def count(self, index, query):
+        return 7
 
 
 class EmptyAnswerTest(unittest.TestCase):
-    def ask(self, *contents):
-        return agent.ask("Question?", tools.Context(None, "x", 8000), FakeClient(*contents))
+    def ask(self, *replies, ctx=None, client=None):
+        client = client or FakeClient(*replies)
+        return agent.ask("Question?", ctx or tools.Context(None, "x", 8000), client)
 
-    def test_empty_answer_is_retried_once(self):
+    def test_empty_answer_is_retried(self):
         self.assertEqual(self.ask("", "Nothing found."), "Nothing found.")
 
+    def test_retry_uses_more_randomness(self):
+        client = FakeClient("", "Nothing found.")
+        self.ask(client=client)
+        self.assertGreater(client.calls[-1]["temperature"], client.calls[0]["temperature"])
+
     def test_still_empty_gives_an_honest_message(self):
-        self.assertIn("returned no answer", self.ask("", ""))
+        self.assertIn("returned no answer", self.ask(""))
+
+    def test_fallback_shows_what_the_tools_found(self):
+        client = FakeClient(tool_call_reply("count_documents", {"query": "x"}), "")
+        answer = self.ask(client=client, ctx=tools.Context(CountingEs(), "x", 8000))
+        self.assertIn("returned no answer", answer)
+        self.assertIn("count_documents", answer)
+        self.assertIn('"documents": 7', answer)
 
     def test_normal_answer_is_returned_directly(self):
         self.assertEqual(self.ask("Answer."), "Answer.")
+
+    def test_long_tool_results_are_shortened_for_retries(self):
+        messages = [{"role": "tool", "tool_call_id": "c1", "content": "x" * 1000},
+                    {"role": "tool", "tool_call_id": "c2", "content": "short"}]
+        shrunk = agent._shrink_tool_results(messages, 0.2)
+        self.assertEqual(len(shrunk[0]["content"]), 200 + len(" ...[truncated]"))
+        self.assertEqual(shrunk[1]["content"], "short")
 
 
 class ScanFilesTest(unittest.TestCase):

@@ -2,6 +2,7 @@
 
 Both return answers in the same format (OpenAI style with tool_calls), so the agent does not need to know the provider."""
 import json
+import logging
 import re
 import time
 import urllib.error
@@ -13,6 +14,8 @@ from . import cloud_policy, config
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 PROVIDER_LABELS = {"local": "Local (LM Studio)", "anthropic": "Claude (cloud)"}
+
+log = logging.getLogger("docsearch.llm")
 
 
 class LlmError(RuntimeError):
@@ -54,14 +57,22 @@ class LocalClient:
     def label(self):
         return f"local: {config.LLM_MODEL}"
 
-    def chat(self, messages, tools=None, max_tokens=1500):
-        body = {"model": config.LLM_MODEL, "messages": messages, "temperature": 0.1, "max_tokens": max_tokens}
+    def chat(self, messages, tools=None, max_tokens=1500, temperature=0.1):
+        body = {"model": config.LLM_MODEL, "messages": messages, "temperature": temperature,
+                "max_tokens": max_tokens}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
         reply = _post(config.LLM_BASE_URL + "/v1/chat/completions", {}, body, 900,
                       unreachable_hint=" Is the model loaded and the server started?")
-        return reply["choices"][0]["message"]
+        choice = reply["choices"][0]
+        message = choice["message"]
+        if not clean(message.get("content")) and not message.get("tool_calls"):
+            usage = reply.get("usage", {})  # evidence for "why did the model say nothing?" in logs/app_*.log
+            log.warning("Empty model reply: finish_reason=%s prompt_tokens=%s completion_tokens=%s "
+                        "reasoning_chars=%s", choice.get("finish_reason"), usage.get("prompt_tokens"),
+                        usage.get("completion_tokens"), len(message.get("reasoning_content") or ""))
+        return message
 
     def context_tokens(self, default=8192):
         """Context length loaded in the server (LM Studio API), otherwise `default`."""
@@ -75,8 +86,10 @@ class LocalClient:
         return default
 
     def context_chars(self):
-        """Character budget for tool results: about 2.5 characters per token, 3000 tokens reserved."""
-        return max(4000, int((self.context_tokens() - 3000) * 2.5))
+        """Character budget for the messages. Normal text is about 3 characters per token, but hashes, keys and
+        base64 only about 1.1, so a cautious 2 is used; 3200 tokens are reserved for the tool definitions
+        and the answer."""
+        return max(4000, int((self.context_tokens() - 3200) * 2.0))
 
 
 # ---- cloud: Anthropic ----------------------------------------------------------------------------
@@ -139,7 +152,8 @@ class AnthropicClient:
     def context_chars(self):
         return 120_000  # large context window; the budget only limits cost and response time
 
-    def chat(self, messages, tools=None, max_tokens=2000):
+    def chat(self, messages, tools=None, max_tokens=2000, temperature=None):
+        # `temperature` is accepted for interface compatibility; the cloud model uses its default
         system, converted = to_anthropic_messages(messages)
         body = {"model": self.model, "max_tokens": max_tokens, "messages": converted}
         if system:
