@@ -1,0 +1,29 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Runtime data and local approvals
+logs/
+gui_settings.json
+cloud_indices.json
+*.log
+*.jsonl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Never commit raw data or exports
+data/
+documents/
+*.vhdx
+*.tar
+*.zip
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

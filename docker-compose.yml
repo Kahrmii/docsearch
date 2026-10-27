@@ -1,0 +1,51 @@
+name: docsearch
+
+# Local stack for full-text indexing of large document collections:
+#   Tika           extracts text (including OCR for scans) from PDF, Office files, etc.
+#   Elasticsearch  is the search index
+# Both ports are bound to the loopback address (127.0.0.1) only, so they are reachable from this machine only.
+# Do not change this to 0.0.0.0 unless the machine is in a trusted network.
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ES_VERSION:-8.15.3}
+    container_name: docsearch-es
+    restart: unless-stopped
+    environment:
+      - node.name=es01
+      - cluster.name=${ES_CLUSTER_NAME:-docsearch-local}
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:?Please set ELASTIC_PASSWORD in .env}
+      - bootstrap.memory_lock=true
+      - ES_JAVA_OPTS=-Xms${ES_HEAP:-4g} -Xmx${ES_HEAP:-4g}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: ${ES_MEM_LIMIT:-6g}
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "127.0.0.1:9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -u elastic:$$ELASTIC_PASSWORD http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 40s
+
+  tika:
+    # The "full" variant ships with Tesseract for OCR.
+    image: apache/tika:${TIKA_VERSION:-latest-full}
+    container_name: docsearch-tika
+    restart: unless-stopped
+    mem_limit: ${TIKA_MEM_LIMIT:-4g}
+    ports:
+      - "127.0.0.1:9998:9998"
+
+volumes:
+  es_data:
+    # Name of the data volume. Set ES_DATA_VOLUME in .env to reuse the index of an earlier setup.
+    name: ${ES_DATA_VOLUME:-docsearch_es_data}
