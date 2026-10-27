@@ -18,19 +18,20 @@ Indexing, searching and counting always run locally; there is no telemetry. Pyth
 3. [Architecture](#architecture)
 4. [Requirements](#requirements)
 5. [Quick start](#quick-start)
-6. [The window](#the-window)
-7. [Command line](#command-line)
-8. [How the agent works](#how-the-agent-works)
-9. [Example questions](#example-questions)
-10. [The indexer in detail](#the-indexer-in-detail)
-11. [Index: fields and queries](#index-fields-and-queries)
-12. [Configuration](#configuration)
-13. [Performance and storage](#performance-and-storage)
-14. [Operation](#operation)
-15. [Security and privacy](#security-and-privacy)
-16. [Troubleshooting](#troubleshooting)
-17. [Project structure and tests](#project-structure-and-tests)
-18. [Limitations](#limitations)
+6. [Web interface](#web-interface)
+7. [The window](#the-window)
+8. [Command line](#command-line)
+9. [How the agent works](#how-the-agent-works)
+10. [Example questions](#example-questions)
+11. [The indexer in detail](#the-indexer-in-detail)
+12. [Index: fields and queries](#index-fields-and-queries)
+13. [Configuration](#configuration)
+14. [Performance and storage](#performance-and-storage)
+15. [Operation](#operation)
+16. [Security and privacy](#security-and-privacy)
+17. [Troubleshooting](#troubleshooting)
+18. [Project structure and tests](#project-structure-and-tests)
+19. [Limitations](#limitations)
 19. [License](#license)
 
 ## Features
@@ -114,6 +115,25 @@ For the questions a model must be loaded in your local LLM server and its local 
 Prefer the command line? `python index.py "D:\Archive" --recursive` and `python ask.py "…"` do the same first-time setup. If you want to start the containers yourself: `docker compose up -d` (create `.env` first with `python -c "from docsearch import config; config.ensure_env()"`).
 
 If your documents are not English, set `OCR_LANGUAGES` (e.g. `deu+eng`) and `TEXT_ANALYZER` (e.g. `german`) in `.env` **before** the first indexing; see [Configuration](#configuration).
+
+## Web interface
+
+Prefer the browser? `start_web.bat` (Windows) or `sh start.sh web` (Linux/macOS) – or `python web.py` – starts a small server on **localhost only** and opens the page. It offers the same functions as the window (the window stays available): tab **Ask** with conversation, tool steps, clickable sources, model choice and the cloud approval with the keys/credentials warning, and tab **Index** with folder, index name, progress and log. "Browse ..." opens the folder dialog of your computer.
+
+```bash
+python web.py                  # default port 8765 (next free port if busy)
+python web.py --port 9000
+python web.py --no-browser     # only print the address
+```
+
+The address printed at start contains a **random token** (`http://127.0.0.1:8765/?token=...`); only that address works, a new token is created on every start. Several browser tabs can be open; each has its own conversation. The window and the web interface share the same settings, approvals and indices, and may run at the same time.
+
+Security of the web interface:
+- It binds to `127.0.0.1` only, so other computers in your network cannot reach it.
+- Every API call needs the token. In addition the `Host` and `Origin` headers are checked, which stops other websites open in your browser (and DNS rebinding tricks) from using the server.
+- The page loads only its own files (Content-Security-Policy) and shows all text from documents and the model as plain text, never as HTML.
+- A file is opened only if the conversation named it as a source; the browser never sends a file path.
+- Do **not** expose the port to a network (port forwarding, reverse proxy, `0.0.0.0`): the interface has no user accounts and can read your documents and use your API key.
 
 ## The window
 
@@ -310,7 +330,8 @@ The index is much smaller than the source because it contains only **text and me
 ```
 docsearch/
 ├── app.py                  main window (tabs Index / Ask)
-├── start.bat / start.sh    starts app.py (Windows / Linux, macOS)
+├── web.py                  web interface on localhost (see "Web interface")
+├── start.bat / start.sh    starts app.py (Windows / Linux, macOS); start_web.bat / "sh start.sh web": web interface
 ├── index.py                indexing from the command line
 ├── ask.py                  questions from the command line
 ├── docker-compose.yml      Elasticsearch + Tika (localhost only)
@@ -325,9 +346,13 @@ docsearch/
 │   ├── indexing.py         pipeline file -> Tika -> Elasticsearch
 │   ├── tools.py            tools of the agent (+ description for the model)
 │   ├── agent.py            agent loop
+│   ├── chat.py             conversation (history, sources, cancel), shared by window and web
+│   ├── files.py            open a source file with its default program
 │   ├── ui_common.py        settings, log forwarding
-│   ├── ui_index.py         tab Index
-│   └── ui_chat.py          tab Ask
+│   ├── ui_index.py         window: tab Index
+│   ├── ui_chat.py          window: tab Ask
+│   ├── webserver.py        web interface: server, API, security checks
+│   └── static/             web interface: index.html, app.css, app.js
 └── tests/                  unit tests (no running services, cloud against a mock server)
 ```
 

@@ -37,16 +37,8 @@ class App(tk.Tk):
         self.after(300, self.poll)
 
     def _start_services(self):
-        try:
-            if services.services_up():
-                self.q.put(("status", "Docker services: running."))
-            else:
-                self.q.put(("status", "Starting the Docker services (the first start downloads several GB) ..."))
-                services.start_containers()
-                self.q.put(("status", "Docker services: running."))
+        if services.ensure_running(lambda text: self.q.put(("status", text))):
             self.q.put(("ready", None))
-        except (Exception, SystemExit) as ex:
-            self.q.put(("status", f"Docker services: {ex}"))
 
     def poll(self):
         try:

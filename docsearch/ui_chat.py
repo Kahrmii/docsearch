@@ -1,28 +1,14 @@
 """Tab "Ask": chat with the agent, sources are clickable."""
 import json
-import os
 import queue
 import re
-import subprocess
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import agent, cloud_policy, llm, secrets_check, tools
+from . import cloud_policy, files, llm, secrets_check
+from .chat import ChatSession
 from .es import Es, EsError
-
-# Only these file types are opened directly; everything else is shown in the file explorer.
-OPENABLE = {"pdf", "docx", "doc", "xlsx", "xls", "odt", "ods", "pptx", "ppt", "rtf", "txt", "csv", "eml",
-            "msg", "html", "htm", "jpg", "jpeg", "png", "tif", "tiff"}
-
-
-def open_source(path):
-    if not path or not os.path.exists(path):
-        return
-    if os.path.splitext(path)[1].lower().lstrip(".") in OPENABLE:
-        os.startfile(path)
-    else:
-        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
 
 
 class ChatTab(ttk.Frame):
@@ -30,13 +16,10 @@ class ChatTab(ttk.Frame):
         super().__init__(master, padding=8)
         self.settings = settings
         self.q = queue.Queue()
-        self.stop_event = threading.Event()
-        self.history = []
-        self.sources = {}  # filename -> path of all sources mentioned so far
-        self.busy = False
         self.es = None
+        self.session = ChatSession(self._es)  # history, sources and cancellation of the conversation
+        self.busy = False
         self.link_count = 0
-        self.last_target = None  # (index, provider) of the last question: the history is dropped when it changes
         self.cloud_confirmed = set()  # indices the user accepted for the cloud despite a secrets warning
 
         bar = ttk.Frame(self)
@@ -78,7 +61,7 @@ class ChatTab(ttk.Frame):
         self.entry.bind("<Return>", lambda e: self.send())
         self.btn_send = ttk.Button(entry, text="Send", command=self.send)
         self.btn_send.pack(side="left", padx=6)
-        self.btn_stop = ttk.Button(entry, text="Stop", command=self.stop_event.set, state="disabled")
+        self.btn_stop = ttk.Button(entry, text="Stop", command=self.session.stop_event.set, state="disabled")
         self.btn_stop.pack(side="left")
         self.status = tk.StringVar(value="Ready.")
         ttk.Label(self, textvariable=self.status).pack(anchor="w", pady=(4, 0))
@@ -139,7 +122,7 @@ class ChatTab(ttk.Frame):
         self.sync_cloud_box()
 
     def reset(self):
-        self.history.clear()
+        self.session.reset()
         self.text.configure(state="normal")
         self.text.delete("1.0", "end")
         self.text.configure(state="disabled")
@@ -160,7 +143,7 @@ class ChatTab(ttk.Frame):
         for group in re.finditer(r"\[([^\[\]]+)\]", answer):
             for name_match in re.finditer(r"[^,;]+", group.group(1)):
                 name = name_match.group().strip()
-                path = self.sources.get(name)
+                path = self.session.sources.get(name)
                 if not path:
                     continue
                 begin = group.start(1) + name_match.start() + name_match.group().index(name)
@@ -168,7 +151,7 @@ class ChatTab(ttk.Frame):
                 self.link_count += 1
                 self.text.tag_add(tag, f"{start}+{begin}c", f"{start}+{begin + len(name)}c")
                 self.text.tag_configure(tag, foreground="#0b57d0", underline=True)
-                self.text.tag_bind(tag, "<Button-1>", lambda e, p=path: open_source(p))
+                self.text.tag_bind(tag, "<Button-1>", lambda e, p=path: files.open_source(p))
                 self.text.tag_bind(tag, "<Enter>", lambda e: self.text.configure(cursor="hand2"))
                 self.text.tag_bind(tag, "<Leave>", lambda e: self.text.configure(cursor=""))
         self.text.see("end")
@@ -192,15 +175,10 @@ class ChatTab(ttk.Frame):
         self.entry.delete(0, "end")
         self.settings.update(chat_index=index, chat_provider=provider)
         self.settings.save()
-        # The history contains text excerpts of the previous index/model: drop it when switching so that
-        # nothing of it unintentionally reaches another model or the cloud.
-        if self.history and self.last_target not in (None, (index, provider)):
-            self.history.clear()
+        if self.session.switch_target(index, provider):  # drops the history of the previous index/model
             self.write("(New conversation: index or model changed.)\n", "step")
-        self.last_target = (index, provider)
         self.write(f"You: {question}\n", "user")
         self.busy = True
-        self.stop_event.clear()
         self.btn_send.configure(state="disabled")
         self.btn_stop.configure(state="normal")
         self.status.set("Working ...")
@@ -208,17 +186,7 @@ class ChatTab(ttk.Frame):
 
     def _work(self, question, index, provider):
         try:
-            client = llm.get_client(provider, index)  # for the cloud this checks the approval before anything is sent
-            self.q.put(("status", f"Working ... ({client.label()})"))
-            ctx = tools.Context(self._es(), index, client.context_chars(), self.stop_event.is_set,
-                                progress=lambda message: self.q.put(("status", message)))
-            answer = agent.ask(question, ctx, client, self.history,
-                               on_step=lambda n, a: self.q.put(("step", (n, a))))
-            self.q.put(("answer", (question, answer, dict(ctx.sources))))
-        except agent.Cancelled:
-            self.q.put(("error", "Cancelled."))
-        except (Exception, SystemExit) as ex:  # EsError, LlmError, missing API key (SystemExit) ...
-            self.q.put(("error", str(ex)))
+            self.session.run(question, index, provider, lambda kind, value: self.q.put((kind, value)))
         finally:
             self.q.put(("done", None))
 
@@ -234,11 +202,7 @@ class ChatTab(ttk.Frame):
                 elif kind == "status":
                     self.status.set(value)
                 elif kind == "answer":
-                    question, answer, sources = value
-                    self.sources.update(sources)
-                    self.write_answer(answer or "(no answer)")
-                    self.history.extend([{"role": "user", "content": question},
-                                         {"role": "assistant", "content": answer}])
+                    self.write_answer(value or "(no answer)")
                 elif kind == "error":
                     self.write(value + "\n\n", "error")
                 elif kind == "done":

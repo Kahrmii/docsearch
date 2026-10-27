@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="token" content="{{TOKEN}}">
+  <title>docsearch</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>docsearch</h1>
+    <span id="docker" class="muted"></span>
+  </header>
+
+  <nav>
+    <button id="tab-ask" class="tab active" type="button">Ask</button>
+    <button id="tab-index" class="tab" type="button">Index</button>
+  </nav>
+
+  <main>
+    <section id="panel-ask">
+      <div class="row">
+        <label>Index <select id="ask-index"></select></label>
+        <label>Model <select id="ask-model"></select></label>
+        <label class="inline"><input id="ask-cloud" type="checkbox"> Allow cloud for this index (text excerpts may be sent)</label>
+        <button id="ask-new" type="button" class="right">New conversation</button>
+      </div>
+      <div id="transcript" aria-live="polite"></div>
+      <form id="ask-form" class="row">
+        <input id="ask-input" type="text" autocomplete="off" placeholder="Ask a question about your documents ...">
+        <button id="ask-send" type="submit" class="primary">Send</button>
+        <button id="ask-stop" type="button" disabled>Stop</button>
+      </form>
+      <div id="ask-status" class="muted">Ready.</div>
+    </section>
+
+    <section id="panel-index" hidden>
+      <div class="row">
+        <label class="grow">Folder <input id="index-folder" type="text" placeholder="C:\path\to\documents"></label>
+        <button id="index-browse" type="button">Browse ...</button>
+      </div>
+      <div class="row">
+        <label>Index <input id="index-name" type="text" value="documents"></label>
+        <label class="inline"><input id="index-recursive" type="checkbox" checked> Include subfolders</label>
+      </div>
+      <div class="row">
+        <button id="index-start" type="button" class="primary">Start</button>
+        <button id="index-stop" type="button" disabled>Stop</button>
+        <button id="index-count" type="button">Count only</button>
+      </div>
+      <progress id="index-progress" max="100" value="0"></progress>
+      <div id="index-status" class="muted">Ready.</div>
+      <pre id="index-log"></pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

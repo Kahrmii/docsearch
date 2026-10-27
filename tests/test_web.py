@@ -1,0 +1,283 @@
+"""Tests for the local web interface: a real server on a free port, no Elasticsearch/LLM/Tika needed."""
+import http.client
+import json
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from docsearch import chat as chat_module
+from docsearch import cloud_policy, files, indexing, secrets_check, ui_common, webserver
+
+
+class FakeEs:
+    def indices(self):
+        return [("documents", 5), ("keys", 2)]
+
+
+class WebTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        # never touch the real settings and approvals of the installation
+        for module, name, filename in ((ui_common, "SETTINGS_FILE", "gui_settings.json"),
+                                       (cloud_policy, "POLICY_FILE", "cloud_indices.json")):
+            patcher = mock.patch.object(module, name, Path(self.tmp.name) / filename)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def start_server(self):
+        self.state = webserver.WebState()
+        self.state._es = FakeEs()
+        self.server = webserver.make_server(self.state, 18765)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def request(self, method, path, body=None, token=True, headers=None):
+        all_headers = {"Content-Type": "application/json"}
+        if token:
+            all_headers["X-Docsearch-Token"] = self.state.token
+        all_headers.update(headers or {})
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        connection.request(method, path, json.dumps(body) if body is not None else None, all_headers)
+        response = connection.getresponse()
+        raw = response.read()
+        connection.close()
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = raw.decode("utf-8", "replace")
+        return response.status, data, response
+
+    def wait_until(self, condition, timeout=10):
+        end = time.time() + timeout
+        while time.time() < end:
+            if condition():
+                return True
+            time.sleep(0.05)
+        return False
+
+
+class SecurityTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        self.start_server()
+
+    def test_page_needs_the_token_in_the_url(self):
+        self.assertEqual(self.request("GET", "/", token=False)[0], 403)
+        self.assertEqual(self.request("GET", "/?token=wrong", token=False)[0], 403)
+        status, html, response = self.request("GET", f"/?token={self.state.token}", token=False)
+        self.assertEqual(status, 200)
+        self.assertIn(f'content="{self.state.token}"', html)
+        self.assertIn("default-src 'self'", response.getheader("Content-Security-Policy"))
+        self.assertEqual(response.getheader("Referrer-Policy"), "no-referrer")
+
+    def test_api_needs_the_token_header(self):
+        self.assertEqual(self.request("GET", "/api/state", token=False)[0], 403)
+        self.assertEqual(self.request("GET", "/api/state", token=False, headers={"X-Docsearch-Token": "x"})[0], 403)
+        status, data, _ = self.request("GET", "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual([i["name"] for i in data["indices"]], ["documents", "keys"])
+
+    def test_foreign_host_header_is_rejected(self):
+        status, _, _ = self.request("GET", "/api/state", headers={"Host": "evil.example:80"})
+        self.assertEqual(status, 403)  # DNS rebinding
+
+    def test_foreign_origin_is_rejected(self):
+        status, _, _ = self.request("POST", "/api/chat/stop", {"chat_id": "c"},
+                                    headers={"Origin": "http://evil.example"})
+        self.assertEqual(status, 403)
+
+    def test_same_origin_is_accepted(self):
+        status, _, _ = self.request("POST", "/api/chat/stop", {"chat_id": "c"},
+                                    headers={"Origin": f"http://127.0.0.1:{self.port}"})
+        self.assertEqual(status, 200)
+
+    def test_only_listed_static_files_are_served(self):
+        self.assertEqual(self.request("GET", "/static/app.js", token=False)[0], 200)
+        self.assertEqual(self.request("GET", "/static/app.css", token=False)[0], 200)
+        self.assertEqual(self.request("GET", "/static/index.html", token=False)[0], 404)
+        self.assertEqual(self.request("GET", "/static/../webserver.py", token=False)[0], 404)
+
+    def test_bad_requests(self):
+        self.assertEqual(self.request("GET", "/api/unknown")[0], 404)
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        connection.request("POST", "/api/cloud", "{not json", {"X-Docsearch-Token": self.state.token})
+        self.assertEqual(connection.getresponse().status, 400)
+
+    def test_server_listens_on_loopback_only(self):
+        self.assertEqual(self.server.server_address[0], "127.0.0.1")
+
+    def test_a_busy_port_is_not_shared_but_the_next_free_one_is_used(self):
+        second = webserver.make_server(self.state, self.port)
+        self.addCleanup(second.server_close)
+        self.assertNotEqual(second.server_address[1], self.port)
+
+
+class OpenSourceTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        self.start_server()
+
+    def test_only_files_named_as_a_source_can_be_opened(self):
+        chat = self.state.chat("c1")
+        chat.session.sources["report.pdf"] = r"C:\docs\report.pdf"
+        with mock.patch.object(files, "open_source", return_value=True) as opener:
+            self.assertEqual(self.request("POST", "/api/open", {"chat_id": "c1", "filename": "report.pdf"})[0], 200)
+            opener.assert_called_once_with(r"C:\docs\report.pdf")
+            opener.reset_mock()
+            self.assertEqual(self.request("POST", "/api/open", {"chat_id": "c1", "filename": "other.pdf"})[0], 404)
+            self.assertEqual(self.request("POST", "/api/open", {"chat_id": "c1", "filename": r"C:\Windows\x.exe"})[0], 404)
+            self.assertEqual(self.request("POST", "/api/open", {"chat_id": "nobody", "filename": "report.pdf"})[0], 404)
+            opener.assert_not_called()
+
+
+class ChatFlowTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        self.start_server()
+        self.gate = threading.Event()
+
+        def fake_run(session, question, index, provider, emit):
+            emit("status", "Working ...")
+            emit("step", ("count_documents", {"query": "x"}))
+            self.gate.wait(5)
+            session.sources["a.pdf"] = r"C:\a.pdf"
+            emit("answer", f"There are 7 documents [a.pdf] ({provider}/{index}).")
+
+        patcher = mock.patch.object(chat_module.ChatSession, "run", fake_run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def poll_until_done(self, since=0):
+        events = []
+        end = time.time() + 10
+        while time.time() < end:
+            _, data, _ = self.request("GET", f"/api/chat/poll?chat_id=c1&since={since}")
+            since = data["next"]
+            events += data["events"]
+            if any(e["type"] == "done" for e in events):
+                return events
+            time.sleep(0.05)
+        self.fail("no 'done' event")
+
+    def test_question_flows_into_events(self):
+        self.gate.set()
+        status, _, _ = self.request("POST", "/api/chat/ask", {"chat_id": "c1", "question": "How many?",
+                                                              "index": "documents", "provider": "local"})
+        self.assertEqual(status, 200)
+        events = self.poll_until_done()
+        self.assertEqual([e["type"] for e in events], ["user", "status", "step", "answer", "done"])
+        answer = next(e for e in events if e["type"] == "answer")
+        self.assertIn("7 documents", answer["text"])
+        self.assertEqual(answer["sources"], ["a.pdf"])  # names only, never paths
+        self.assertNotIn("C:", json.dumps(events))
+
+    def test_second_question_while_busy_is_rejected(self):
+        body = {"chat_id": "c1", "question": "First?", "index": "documents", "provider": "local"}
+        self.assertEqual(self.request("POST", "/api/chat/ask", body)[0], 200)
+        self.assertEqual(self.request("POST", "/api/chat/ask", {**body, "question": "Second?"})[0], 409)
+        self.gate.set()
+        self.poll_until_done()
+
+    def test_validation(self):
+        self.assertEqual(self.request("POST", "/api/chat/ask", {"chat_id": "c1", "question": "",
+                                                                "index": "documents"})[0], 400)
+        self.assertEqual(self.request("POST", "/api/chat/ask", {"chat_id": "c1", "question": "x", "index": "d",
+                                                                "provider": "nope"})[0], 400)
+
+    def test_switching_index_starts_a_new_conversation(self):
+        self.gate.set()
+        body = {"chat_id": "c1", "question": "One?", "index": "documents", "provider": "local"}
+        self.request("POST", "/api/chat/ask", body)
+        since = len(self.poll_until_done())
+        self.state.chat("c1").session.history.append({"role": "user", "content": "excerpts of documents"})
+        self.request("POST", "/api/chat/ask", {**body, "index": "keys", "question": "Two?"})
+        events = self.poll_until_done(since)
+        self.assertEqual(events[0]["type"], "info")
+        self.assertEqual(self.state.chat("c1").session.history, [])
+
+
+class CloudApprovalTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        self.start_server()
+        self.risky = {"documents": 100, "pem_private_keys": 2, "credential_keywords": 50, "credential_filenames": 3}
+        self.clean = {"documents": 100, "pem_private_keys": 0, "credential_keywords": 1, "credential_filenames": 0}
+
+    def scan_returns(self, findings):
+        patcher = mock.patch.object(secrets_check, "scan", return_value=findings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_cloud_question_is_refused_without_approval(self):
+        status, data, _ = self.request("POST", "/api/chat/ask", {"chat_id": "c", "question": "x", "index": "documents",
+                                                                  "provider": "anthropic"})
+        self.assertEqual(status, 403)
+        self.assertIn("not approved for the cloud", data["error"])
+
+    def test_risky_index_needs_confirmation_and_stays_blocked_until_confirmed(self):
+        self.scan_returns(self.risky)
+        status, data, _ = self.request("POST", "/api/cloud", {"index": "documents", "allowed": True})
+        self.assertTrue(data["needs_confirmation"])
+        self.assertIn("2 documents with private key headers", data["message"])
+        self.assertFalse(cloud_policy.is_allowed("documents"))  # not approved yet
+        status, data, _ = self.request("POST", "/api/cloud", {"index": "documents", "allowed": True, "confirm": True})
+        self.assertEqual(status, 200)
+        self.assertTrue(cloud_policy.is_allowed("documents"))
+
+    def test_clean_index_is_approved_directly(self):
+        self.scan_returns(self.clean)
+        status, data, _ = self.request("POST", "/api/cloud", {"index": "documents", "allowed": True})
+        self.assertEqual(status, 200)
+        self.assertNotIn("needs_confirmation", data)
+        self.assertTrue(cloud_policy.is_allowed("documents"))
+
+    def test_approved_but_risky_index_asks_again_at_the_first_cloud_question(self):
+        cloud_policy.set_allowed("documents", True)
+        self.scan_returns(self.risky)
+        body = {"chat_id": "c", "question": "x", "index": "documents", "provider": "anthropic"}
+        self.assertTrue(self.request("POST", "/api/chat/ask", body)[1]["needs_confirmation"])
+        with mock.patch.object(chat_module.ChatSession, "run", lambda *a, **k: None):
+            self.assertEqual(self.request("POST", "/api/chat/ask", {**body, "confirm": True})[0], 200)
+
+    def test_withdrawing_the_approval(self):
+        cloud_policy.set_allowed("documents", True)
+        self.assertEqual(self.request("POST", "/api/cloud", {"index": "documents", "allowed": False})[0], 200)
+        self.assertFalse(cloud_policy.is_allowed("documents"))
+
+
+class IndexFlowTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        self.start_server()
+
+    def test_job_reports_progress_and_message(self):
+        def fake_job(opts, on_progress=None, should_stop=None, on_status=None):
+            on_status("Starting Docker containers ...")
+            on_progress({"done": 1, "total": 2, "ok": 1, "errors": 0, "skipped": 0, "rate": 1.0, "eta_s": 1})
+            return "Done. ok 2, errors 0, skipped 0.", opts.index
+
+        with mock.patch.object(indexing, "run_job", fake_job):
+            body = {"folder": self.tmp.name, "index": "my_index", "recursive": True}
+            self.assertEqual(self.request("POST", "/api/index/start", body)[0], 200)
+            self.assertTrue(self.wait_until(lambda: not self.request("GET", "/api/index/status")[1]["running"]))
+        data = self.request("GET", "/api/index/status")[1]
+        self.assertEqual(data["message"], "Done. ok 2, errors 0, skipped 0.")
+        self.assertEqual(data["progress"]["done"], 1)
+        saved = json.loads((Path(self.tmp.name) / "gui_settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["index"], "my_index")
+
+    def test_validation(self):
+        self.assertEqual(self.request("POST", "/api/index/start", {"folder": "Z:\\does\\not\\exist",
+                                                                   "index": "ok"})[0], 400)
+        self.assertEqual(self.request("POST", "/api/index/start", {"folder": self.tmp.name,
+                                                                   "index": "Bad Name"})[0], 400)
+
+
+if __name__ == "__main__":
+    unittest.main()

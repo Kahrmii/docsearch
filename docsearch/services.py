@@ -32,6 +32,23 @@ def services_up():
     return tika_version() is not None and es_up()
 
 
+def ensure_running(on_status):
+    """Start the Docker services if they are not running. Progress and problems go to on_status(text); never raises.
+
+    Returns True if the services are running afterwards."""
+    try:
+        if services_up():
+            on_status("Docker services: running.")
+            return True
+        on_status("Starting the Docker services (the first start downloads several GB) ...")
+        start_containers()
+        on_status("Docker services: running.")
+        return True
+    except (Exception, SystemExit) as ex:
+        on_status(f"Docker services: {ex}")
+        return False
+
+
 def start_containers(wait_s=240):
     """Make sure .env exists, run `docker compose up -d` and wait until both services are ready.
 

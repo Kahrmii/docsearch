@@ -2,12 +2,11 @@
 import logging
 import os
 import queue
-import re
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from . import indexing, services
+from . import indexing
 from .ui_common import QueueHandler
 
 
@@ -70,7 +69,7 @@ class IndexTab(ttk.Frame):
         if not os.path.isdir(folder):
             messagebox.showerror("Folder", "Please choose an existing folder.")
             return
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_\-]*", index):
+        if not indexing.valid_index_name(index):
             messagebox.showerror("Index", "Index name: only lowercase letters, digits, _ and -.")
             return
         self.settings.update(folder=folder, index=index, recursive=self.recursive.get())
@@ -85,17 +84,10 @@ class IndexTab(ttk.Frame):
         handler = QueueHandler(self.q)
         logging.getLogger("docsearch").addHandler(handler)
         try:
-            if not opts.dry_run and not services.services_up():
-                self.q.put(("status", "Starting Docker containers ..."))
-                services.start_containers()
-            stats = indexing.run(opts, on_progress=lambda p: self.q.put(("progress", p)),
-                                 should_stop=self.stop_event.is_set)
-            if opts.dry_run:
-                message = f"{stats['total']} files found."
-            else:
-                message = ("Stopped. " if stats["stopped"] else "Done. ") + \
-                          f"ok {stats['ok']}, errors {stats['errors']}, skipped {stats['skipped']}."
-            self.q.put(("done", (message, None if opts.dry_run else opts.index)))
+            message, index = indexing.run_job(opts, on_progress=lambda p: self.q.put(("progress", p)),
+                                              should_stop=self.stop_event.is_set,
+                                              on_status=lambda s: self.q.put(("status", s)))
+            self.q.put(("done", (message, index)))
         except Exception as ex:
             self.q.put(("done", (f"Error: {ex}", None)))
         finally:

@@ -38,6 +38,14 @@ class Options:
     dry_run: bool = False
 
 
+INDEX_NAME = re.compile(r"[a-z0-9][a-z0-9_\-]*")
+
+
+def valid_index_name(name):
+    """Elasticsearch index names: lowercase letters, digits, _ and -, not starting with _ or -."""
+    return bool(INDEX_NAME.fullmatch(name))
+
+
 def scan_files(data_dir, recursive):
     """[(relative path with '/', size, mtime)], sorted."""
     entries = []
@@ -139,6 +147,22 @@ def _failed_ids():
 def _format_eta(seconds):
     seconds = int(seconds)
     return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
+
+
+def run_job(opts, on_progress=None, should_stop=None, on_status=None):
+    """`run()` for the user interfaces: starts the Docker services first if they are not running.
+
+    Returns (message for the user, index name or None for a dry run). Errors are not caught here."""
+    if not opts.dry_run and not services.services_up():
+        if on_status:
+            on_status("Starting Docker containers ...")
+        services.start_containers()
+    stats = run(opts, on_progress, should_stop)
+    if opts.dry_run:
+        return f"{stats['total']} files found.", None
+    message = ("Stopped. " if stats["stopped"] else "Done. ") + \
+              f"ok {stats['ok']}, errors {stats['errors']}, skipped {stats['skipped']}."
+    return message, opts.index.strip().lower()
 
 
 def run(opts, on_progress=None, should_stop=None):
