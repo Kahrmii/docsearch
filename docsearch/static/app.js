@@ -174,7 +174,7 @@
         const link = document.createElement("a");
         link.href = "#";
         link.textContent = name;
-        link.addEventListener("click", (event) => { event.preventDefault(); openSource(name); });
+        link.addEventListener("click", (event) => { event.preventDefault(); previewSource(name); });
         container.append(document.createTextNode(part.slice(0, start)), link,
                          document.createTextNode(part.slice(start + name.length)));
       }
@@ -196,6 +196,88 @@
       }
     });
   }
+
+  // ---- saved conversations
+  async function loadConversations(keep) {
+    const { ok, data } = await api("/api/conversations");
+    if (!ok) return;
+    fillSelect($("conv-list"), data.conversations.map((c) => [c.id, `${c.title} (${c.questions})`]),
+               keep || $("conv-list").value);
+    for (const id of ["conv-load", "conv-rename", "conv-delete"]) $(id).disabled = data.conversations.length === 0;
+  }
+  $("conv-load").addEventListener("click", async () => {
+    if (!$("conv-list").value) return;
+    const res = await api("/api/conversations/load", { chat_id: chatId, id: $("conv-list").value });
+    if (!res.ok) { line("error", res.data.error || "Could not open the conversation."); return; }
+    $("transcript").replaceChildren();
+    chatSince = 0;
+    if (res.data.index && state.indices.some((i) => i.name === res.data.index)) {
+      $("ask-index").value = res.data.index;
+      syncCloudBox();
+    }
+    if (res.data.provider) $("ask-model").value = res.data.provider;
+    await pollChat();
+  });
+  $("conv-rename").addEventListener("click", async () => {
+    const id = $("conv-list").value;
+    if (!id) return;
+    const title = window.prompt("New title:", $("conv-list").selectedOptions[0].textContent.replace(/ \(\d+\)$/, ""));
+    if (!title) return;
+    const res = await api("/api/conversations/rename", { id, title });
+    if (!res.ok) line("error", res.data.error || "Could not rename.");
+    await loadConversations(id);
+  });
+  $("conv-delete").addEventListener("click", async () => {
+    const id = $("conv-list").value;
+    if (!id || !window.confirm("Delete this saved conversation permanently?")) return;
+    const res = await api("/api/conversations/delete", { id });
+    if (!res.ok) line("error", res.data.error || "Could not delete.");
+    await loadConversations();
+  });
+  $("conv-export").addEventListener("click", async () => {
+    const res = await api("/api/conversations/export?chat_id=" + encodeURIComponent(chatId));
+    if (!res.ok) { line("error", res.data.error || "Could not export."); return; }
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([res.data.markdown], { type: "text/markdown" }));
+    link.download = res.data.filename;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  });
+
+  // passage preview: the text around the searched words, with the words marked (DOM nodes, never HTML)
+  let previewName = null;
+  function markTerms(container, text, terms) {
+    const words = terms.filter((t) => t).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    if (!words.length) { container.append(document.createTextNode(text)); return; }
+    const pattern = new RegExp("(" + words.join("|") + ")", "gi");
+    text.split(pattern).forEach((piece, i) => {
+      if (i % 2 === 1) {
+        const mark = document.createElement("mark");
+        mark.textContent = piece;
+        container.append(mark);
+      } else {
+        container.append(document.createTextNode(piece));
+      }
+    });
+  }
+
+  async function previewSource(filename) {
+    const res = await api("/api/preview?chat_id=" + encodeURIComponent(chatId) + "&filename=" + encodeURIComponent(filename));
+    if (!res.ok) { line("error", res.data.error || "No preview available."); return; }
+    previewName = filename;
+    $("preview-title").textContent = filename;
+    $("preview-note").textContent = res.data.length + " characters of text";
+    $("preview-body").replaceChildren(...res.data.passages.map((passage) => {
+      const p = document.createElement("p");
+      p.append(document.createTextNode("… "));
+      markTerms(p, passage, res.data.terms);
+      p.append(document.createTextNode(" …"));
+      return p;
+    }));
+    $("preview").hidden = false;
+  }
+  $("preview-close").addEventListener("click", () => { $("preview").hidden = true; });
+  $("preview-open").addEventListener("click", () => { if (previewName) openSource(previewName); });
 
   async function openSource(filename) {
     const res = await api("/api/open", { chat_id: chatId, filename });
@@ -231,6 +313,7 @@
       clearInterval(chatPoll);
       chatPoll = null;
       setBusy(false);
+      loadConversations();
     }
   }
 
@@ -336,5 +419,6 @@
   });
 
   loadState();
+  loadConversations();
   setInterval(loadState, 5000);
 })();

@@ -49,6 +49,10 @@ progress { width: 100%; height: 14px; }
 #index-log { flex: 1; min-height: 200px; max-height: 50vh; overflow: auto; background: var(--panel);
              border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 0;
              font: 12px/1.4 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+#preview { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 10px 14px; }
+#preview-body { max-height: 30vh; overflow-y: auto; }
+#preview-body p { margin: 8px 0; white-space: pre-wrap; }
+#preview mark { background: #ffe066; color: #1d2330; border-radius: 3px; padding: 0 2px; }
 .danger-zone { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 8px; }
 button.danger { color: var(--error); border-color: var(--error); }
 button.danger:hover:not(:disabled) { background: var(--error); color: #ffffff; }

@@ -5,6 +5,7 @@
 
 # Runtime data and local approvals
 logs/
+conversations/
 gui_settings.json
 cloud_indices.json
 *.log

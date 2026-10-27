@@ -77,10 +77,11 @@ def _int(name, default):
 
 INDEX_WORKERS = _int("INDEX_WORKERS", 4)          # parallel Tika requests (mind Tika's memory)
 INDEX_BATCH_SIZE = _int("INDEX_BATCH_SIZE", 50)   # files per Elasticsearch write and resume check
+SAVE_CONVERSATIONS = get("SAVE_CONVERSATIONS", "1") != "0"  # keep conversations in conversations/
 MAX_FILE_MB = _int("MAX_FILE_MB", 100)            # larger files are skipped (0 = no limit)
 
 # settings that can be changed while the program runs (see preferences.py): name -> conversion of the text value
-_CONVERTERS = {"LLM_THINK": lambda v: v == "1", "INDEX_WORKERS": int, "INDEX_BATCH_SIZE": int, "MAX_FILE_MB": int}
+_CONVERTERS = {"LLM_THINK": lambda v: v == "1", "SAVE_CONVERSATIONS": lambda v: v == "1", "INDEX_WORKERS": int, "INDEX_BATCH_SIZE": int, "MAX_FILE_MB": int}
 
 
 def write_env_values(values):

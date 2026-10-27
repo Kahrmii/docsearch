@@ -4,9 +4,10 @@ import queue
 import re
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from pathlib import Path
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from . import cloud_policy, files, llm, secrets_check
+from . import cloud_policy, conversations, files, llm, secrets_check
 from .chat import ChatSession
 from .es import Es, EsError
 
@@ -31,6 +32,8 @@ class ChatTab(ttk.Frame):
         self.combo.bind("<<ComboboxSelected>>", lambda e: self.sync_cloud_box())
         ttk.Button(bar, text="Refresh", command=self.refresh_indices).pack(side="left")
         ttk.Button(bar, text="New conversation", command=self.reset).pack(side="right")
+        ttk.Button(bar, text="Export ...", command=self.export).pack(side="right", padx=6)
+        ttk.Button(bar, text="History ...", command=self.history).pack(side="right")
 
         model_bar = ttk.Frame(self)
         model_bar.pack(fill="x", pady=(6, 0))
@@ -134,6 +137,86 @@ class ChatTab(ttk.Frame):
         self.text.configure(state="disabled")
         self.status.set("New conversation.")
 
+    # ---- Saved conversations
+    def export(self):
+        """Save the current conversation as a Markdown file."""
+        if not self.session.turns:
+            messagebox.showinfo("Export", "There is nothing to export yet.")
+            return
+        conv = {**self.session.snapshot(), "updated": ""}
+        path = filedialog.asksaveasfilename(defaultextension=".md", filetypes=[("Markdown", "*.md")],
+                                            initialfile=(conv["title"] or "conversation")[:40].strip() + ".md")
+        if path:
+            Path(path).write_text(conversations.to_markdown(conv), encoding="utf-8")
+            self.status.set(f"Exported to {path}")
+
+    def open_conversation(self, conv):
+        self.session.restore(conv)
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.configure(state="disabled")
+        self.write(f"(Conversation loaded: {conv.get('title') or 'untitled'})\n", "step")
+        for turn in conv["turns"]:
+            self.write(f"You: {turn['question']}\n", "user")
+            self.write_answer(turn["answer"])
+        if conv.get("index"):
+            self.index.set(conv["index"])
+        self.provider.set(llm.PROVIDER_LABELS.get(conv.get("provider"), self.provider.get()))
+        self.sync_cloud_box()
+
+    def history(self):
+        """Window with the saved conversations: open, rename or delete one."""
+        window = tk.Toplevel(self)
+        window.title("Saved conversations")
+        window.geometry("560x320")
+        items = []
+        box = tk.Listbox(window, activestyle="dotbox")
+        box.pack(fill="both", expand=True, padx=8, pady=8)
+
+        def fill():
+            items[:] = conversations.listing()
+            box.delete(0, "end")
+            for c in items:
+                box.insert("end", f"{c['updated'][:16].replace('T', ' ')}  {c['title']}  ({c['questions']})")
+
+        def selected():
+            return items[box.curselection()[0]] if box.curselection() else None
+
+        def open_it():
+            item = selected()
+            conv = conversations.load(item["id"]) if item else None
+            if conv is None:
+                return
+            if self.busy:
+                messagebox.showinfo("History", "Still working on a question; stop it first.", parent=window)
+                return
+            self.open_conversation(conv)
+            window.destroy()
+
+        def rename():
+            item = selected()
+            title = simpledialog.askstring("Rename", "New title:", initialvalue=item["title"], parent=window) \
+                if item else None
+            if title and conversations.rename(item["id"], title):
+                if self.session.conv_id == item["id"]:
+                    self.session.title = title
+                fill()
+
+        def delete():
+            item = selected()
+            if item and messagebox.askyesno("Delete", f"Delete '{item['title']}' permanently?", parent=window):
+                conversations.delete(item["id"])
+                if self.session.conv_id == item["id"] and not self.busy:
+                    self.reset()  # otherwise the next answer would bring the file back
+                fill()
+
+        bar = ttk.Frame(window)
+        bar.pack(fill="x", padx=8, pady=(0, 8))
+        for label, command in (("Open", open_it), ("Rename", rename), ("Delete", delete)):
+            ttk.Button(bar, text=label, command=command).pack(side="left", padx=(0, 6))
+        box.bind("<Double-Button-1>", lambda e: open_it())
+        fill()
+
     # ---- Output
     def write(self, text, tag=None):
         self.text.configure(state="normal")
@@ -157,11 +240,40 @@ class ChatTab(ttk.Frame):
                 self.link_count += 1
                 self.text.tag_add(tag, f"{start}+{begin}c", f"{start}+{begin + len(name)}c")
                 self.text.tag_configure(tag, foreground="#0b57d0", underline=True)
-                self.text.tag_bind(tag, "<Button-1>", lambda e, p=path: files.open_source(p))
+                self.text.tag_bind(tag, "<Button-1>", lambda e, n=name, p=path: self.show_preview(n, p))
                 self.text.tag_bind(tag, "<Enter>", lambda e: self.text.configure(cursor="hand2"))
                 self.text.tag_bind(tag, "<Leave>", lambda e: self.text.configure(cursor=""))
         self.text.see("end")
         self.text.configure(state="disabled")
+
+    def show_preview(self, name, path):
+        """Window with the passages of a source that match the search, and a button to open the file."""
+        try:
+            preview = self.session.preview(name)
+        except (EsError, SystemExit, OSError) as ex:
+            messagebox.showerror("Preview", f"Elasticsearch is not reachable: {ex}")
+            return
+        if preview is None:
+            files.open_source(path)  # no preview available: open the file as before
+            return
+        window = tk.Toplevel(self)
+        window.title(name)
+        window.geometry("720x420")
+        bar = ttk.Frame(window, padding=6)
+        bar.pack(fill="x")
+        ttk.Label(bar, text=f"{preview['length']} characters of text").pack(side="left")
+        ttk.Button(bar, text="Open file", command=lambda: files.open_source(path)).pack(side="right")
+        box = tk.Text(window, wrap="word", font=("Segoe UI", 10), padx=8, pady=6)
+        box.pack(fill="both", expand=True)
+        box.tag_configure("hit", background="#ffe066", foreground="#1d2330")
+        terms = [t for t in preview["terms"] if t]
+        pattern = re.compile("(" + "|".join(re.escape(t) for t in terms) + ")", re.I) if terms else None
+        for passage in preview["passages"]:
+            box.insert("end", "… ")
+            for i, piece in enumerate(pattern.split(passage) if pattern else [passage]):
+                box.insert("end", piece, "hit" if i % 2 else "")
+            box.insert("end", " …\n\n")
+        box.configure(state="disabled")
 
     # ---- Send a question
     def send(self):

@@ -17,6 +17,9 @@ FIELDS = [
     {"key": "LLM_THINK", "label": "Thinking mode (Qwen3)", "kind": "bool",
      "help": "More accurate, but much slower."},
     {"key": "ANTHROPIC_MODEL", "label": "Cloud model", "kind": "text", "help": "Claude model used in cloud mode."},
+    {"key": "SAVE_CONVERSATIONS", "label": "Save conversations", "kind": "bool",
+     "help": "Keeps questions and answers in the conversations folder on this computer (they can contain "
+             "excerpts of your documents). Turn off to keep nothing."},
     {"key": "OCR_LANGUAGES", "label": "OCR languages", "kind": "text",
      "help": "Tesseract languages joined with +, for example deu+eng. Applies to files indexed from now on."},
     {"key": "TEXT_ANALYZER", "label": "Text analyzer", "kind": "choice", "choices": ANALYZERS,

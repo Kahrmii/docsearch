@@ -2,6 +2,14 @@
 
 All notable changes. The version is in `docsearch/__init__.py` (`python web.py --version`).
 
+## 0.6.0
+
+- Source preview: clicking a source in an answer shows the passages around the searched words (marked) in the
+  window or the page; "Open file" opens the whole file as before.
+- Saved conversations: every answer is stored in `conversations/` (ignored by git). Open, rename and delete them in
+  the web page ("Saved conversations") or the window ("History ..."), and export the current one as Markdown with
+  the cited file names. The setting "Save conversations" turns this off.
+
 ## 0.5.0
 
 - Duplicates: a file whose content (SHA-256) is already in the index, and a mail whose Message-ID is already

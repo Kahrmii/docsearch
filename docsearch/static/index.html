@@ -28,7 +28,23 @@
         <label class="inline"><input id="ask-cloud" type="checkbox"> Allow cloud for this index (text excerpts may be sent)</label>
         <button id="ask-new" type="button" class="right">New conversation</button>
       </div>
+      <div class="row">
+        <label class="grow">Saved conversations <select id="conv-list"></select></label>
+        <button id="conv-load" type="button">Open</button>
+        <button id="conv-rename" type="button">Rename</button>
+        <button id="conv-delete" type="button">Delete</button>
+        <button id="conv-export" type="button">Export this conversation (.md)</button>
+      </div>
       <div id="transcript" aria-live="polite"></div>
+      <div id="preview" hidden>
+        <div class="row">
+          <strong id="preview-title"></strong>
+          <span id="preview-note" class="muted"></span>
+          <button id="preview-open" type="button" class="right">Open file</button>
+          <button id="preview-close" type="button">Close</button>
+        </div>
+        <div id="preview-body"></div>
+      </div>
       <form id="ask-form" class="row">
         <input id="ask-input" type="text" autocomplete="off" placeholder="Ask a question about your documents ...">
         <button id="ask-send" type="submit" class="primary">Send</button>

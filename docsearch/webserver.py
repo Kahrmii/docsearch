@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, cloud_policy, config, files, health, index_admin, indexing, llm, preferences, secrets_check,
+from . import (__version__, cloud_policy, config, conversations, files, health, index_admin, indexing, llm, preferences, secrets_check,
                services)
 from .chat import ChatSession
 from .es import Es, EsError, valid_index_name
@@ -84,6 +84,20 @@ class ChatRun:
         with self.lock:
             self.session.reset()
             self.events.clear()
+
+    def load(self, conv):
+        """Continue a saved conversation: replay it as events (the page starts polling from 0 again)."""
+        with self.lock:
+            if self.busy:
+                return False
+            self.session.restore(conv)
+            self.events.clear()
+            self.events.append({"type": "info", "text": f"(Conversation loaded: {conv.get('title') or 'untitled'})"})
+            for turn in conv["turns"]:
+                self.events.append({"type": "user", "text": turn["question"]})
+                self.events.append({"type": "answer", "text": turn["answer"],
+                                    "sources": sorted(self.session.sources)})
+            return True
 
 
 class IndexRun:
@@ -312,6 +326,60 @@ def api_chat_reset(state, query, body):
     return 200, {"ok": True}
 
 
+def api_preview(state, query, body):
+    chat = state.chats.get(query.get("chat_id", ""))
+    try:
+        preview = chat.session.preview(query.get("filename", "")) if chat else None
+    except (EsError, SystemExit, OSError) as e:
+        return 502, {"error": f"Elasticsearch is not reachable: {e}"}
+    if preview is None:
+        return 404, {"error": "No preview available for that file."}
+    return 200, preview
+
+
+def api_conversations(state, query, body):
+    return 200, {"conversations": conversations.listing()}
+
+
+def api_conversation_load(state, query, body):
+    conv = conversations.load(_text(body, "id"))
+    if conv is None:
+        return 404, {"error": "That conversation does not exist any more."}
+    if not state.chat(_text(body, "chat_id")).load(conv):
+        return 409, {"error": "Still working on a question; stop it first."}
+    return 200, {"ok": True, "index": conv.get("index"), "provider": conv.get("provider")}
+
+
+def api_conversation_rename(state, query, body):
+    conv_id, title = _text(body, "id"), _text(body, "title")
+    if not title or not conversations.rename(conv_id, title):
+        return 404, {"error": "That conversation does not exist, or the title is empty."}
+    for chat in list(state.chats.values()):  # keep an open copy of it consistent
+        if chat.session.conv_id == conv_id:
+            chat.session.title = title
+    return 200, {"ok": True}
+
+
+def api_conversation_delete(state, query, body):
+    conv_id = _text(body, "id")
+    if not conversations.delete(conv_id):
+        return 404, {"error": "That conversation does not exist."}
+    for chat in list(state.chats.values()):  # the open copy must not bring the file back with its next answer
+        if chat.session.conv_id == conv_id and not chat.busy:
+            chat.reset()
+    return 200, {"ok": True}
+
+
+def api_conversation_export(state, query, body):
+    """The conversation of this browser tab (even if nothing is saved) as Markdown text."""
+    chat = state.chats.get(query.get("chat_id", ""))
+    if chat is None or not chat.session.turns:
+        return 404, {"error": "There is nothing to export yet."}
+    conv = {**chat.session.snapshot(), "updated": ""}
+    name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in (conv["title"] or "conversation"))[:60].strip()
+    return 200, {"filename": (name or "conversation") + ".md", "markdown": conversations.to_markdown(conv)}
+
+
 def api_health(state, query, body):
     return 200, {"version": __version__, "checks": health.run_checks()}
 
@@ -350,6 +418,12 @@ ROUTES = {
     ("POST", "/api/chat/stop"): api_chat_stop,
     ("POST", "/api/chat/reset"): api_chat_reset,
     ("POST", "/api/open"): api_open,
+    ("GET", "/api/preview"): api_preview,
+    ("GET", "/api/conversations"): api_conversations,
+    ("POST", "/api/conversations/load"): api_conversation_load,
+    ("POST", "/api/conversations/rename"): api_conversation_rename,
+    ("POST", "/api/conversations/delete"): api_conversation_delete,
+    ("GET", "/api/conversations/export"): api_conversation_export,
     ("GET", "/api/health"): api_health,
     ("GET", "/api/settings"): api_settings,
     ("POST", "/api/settings/save"): api_settings_save,

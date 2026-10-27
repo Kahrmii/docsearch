@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from docsearch import chat as chat_module
-from docsearch import cloud_policy, config, files, health, indexing, preferences, secrets_check, ui_common, webserver
+from docsearch import cloud_policy, config, conversations, files, health, indexing, preferences, secrets_check, ui_common, webserver
 
 
 class FakeEs:
@@ -375,6 +375,63 @@ class StatusAndSettingsTest(WebTestCase):
         self.assertEqual(self.request("GET", "/api/settings", token=False)[0], 403)
         self.assertEqual(self.request("POST", "/api/settings/save", {"MAX_FILE_MB": "5"}, token=False)[0], 403)
         self.assertEqual(self.request("GET", "/api/health", token=False)[0], 403)
+
+
+class ConversationApiTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(conversations, "CONV_DIR", Path(self.tmp.name) / "conversations")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.conv = {"id": conversations.new_id(), "title": "Contracts", "index": "documents", "provider": "local",
+                     "turns": [{"question": "Who signed?", "answer": "Anna [a.pdf].", "sources": ["a.pdf"]}],
+                     "sources": {"a.pdf": "C:/docs/a.pdf"}}
+        conversations.save(self.conv)
+        self.start_server()
+
+    def test_list_and_load_replays_the_conversation(self):
+        _, data, _ = self.request("GET", "/api/conversations")
+        self.assertEqual([c["title"] for c in data["conversations"]], ["Contracts"])
+        status, data, _ = self.request("POST", "/api/conversations/load", {"chat_id": "tab1", "id": self.conv["id"]})
+        self.assertEqual((status, data["index"]), (200, "documents"))
+        _, poll, _ = self.request("GET", "/api/chat/poll?chat_id=tab1&since=0")
+        kinds = [e["type"] for e in poll["events"]]
+        self.assertEqual(kinds, ["info", "user", "answer"])
+        self.assertEqual(poll["events"][2]["sources"], ["a.pdf"])  # the file links work in the replay
+        self.assertEqual(self.state.chats["tab1"].session.history[0]["content"], "Who signed?")
+
+    def test_unknown_and_malformed_ids(self):
+        self.assertEqual(self.request("POST", "/api/conversations/load", {"chat_id": "t", "id": "x" * 32})[0], 404)
+        self.assertEqual(self.request("POST", "/api/conversations/load", {"chat_id": "t", "id": "../../x"})[0], 404)
+        self.assertEqual(self.request("POST", "/api/conversations/delete", {"id": "../../x"})[0], 404)
+
+    def test_rename_and_delete(self):
+        self.request("POST", "/api/conversations/load", {"chat_id": "tab1", "id": self.conv["id"]})
+        self.assertEqual(self.request("POST", "/api/conversations/rename",
+                                      {"id": self.conv["id"], "title": "Signatures"})[0], 200)
+        self.assertEqual(conversations.listing()[0]["title"], "Signatures")
+        self.assertEqual(self.request("POST", "/api/conversations/rename", {"id": self.conv["id"], "title": " "})[0], 404)
+        self.assertEqual(self.request("POST", "/api/conversations/delete", {"id": self.conv["id"]})[0], 200)
+        self.assertEqual(conversations.listing(), [])
+        self.assertIsNone(self.state.chats["tab1"].session.conv_id)  # the open copy is detached from the deleted file
+
+    def test_export_of_the_open_conversation(self):
+        self.assertEqual(self.request("GET", "/api/conversations/export?chat_id=none")[0], 404)
+        self.request("POST", "/api/conversations/load", {"chat_id": "tab1", "id": self.conv["id"]})
+        status, data, _ = self.request("GET", "/api/conversations/export?chat_id=tab1")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["filename"], "Contracts.md")
+        self.assertIn("## 1. Who signed?", data["markdown"])
+        self.assertNotIn("C:/docs", data["markdown"])
+
+    def test_a_busy_conversation_cannot_be_replaced(self):
+        self.state.chat("tab1").busy = True
+        self.assertEqual(self.request("POST", "/api/conversations/load", {"chat_id": "tab1", "id": self.conv["id"]})[0], 409)
+
+    def test_the_token_is_required(self):
+        self.assertEqual(self.request("GET", "/api/conversations", token=False)[0], 403)
+        self.assertEqual(self.request("POST", "/api/conversations/delete", {"id": self.conv["id"]}, token=False)[0], 403)
+        self.assertEqual(len(conversations.listing()), 1)
 
 
 if __name__ == "__main__":
