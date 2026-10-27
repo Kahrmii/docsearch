@@ -131,6 +131,14 @@ class EmptyAnswerTest(unittest.TestCase):
         self.assertIn("count_documents", answer)
         self.assertIn('"documents": 7', answer)
 
+    def test_refusal_is_reported_and_not_retried(self):
+        client = FakeClient(tool_call_reply("count_documents", {"query": "x"}),
+                            {"content": "", "tool_calls": [], "stop_reason": "refusal"})
+        answer = self.ask(client=client, ctx=tools.Context(CountingEs(), "x", 8000))
+        self.assertIn("declined to answer", answer)
+        self.assertIn('"documents": 7', answer)  # the tool results are still shown
+        self.assertEqual(len(client.calls), 2)  # tool step + refused reply, no retries
+
     def test_normal_answer_is_returned_directly(self):
         self.assertEqual(self.ask("Answer."), "Answer.")
 

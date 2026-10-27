@@ -136,7 +136,7 @@ def from_anthropic(reply):
               "function": {"name": b["name"], "arguments": json.dumps(b.get("input") or {}, ensure_ascii=False)}}
              for b in blocks if b["type"] == "tool_use"]
     return {"role": "assistant", "content": "".join(b["text"] for b in blocks if b["type"] == "text"),
-            "tool_calls": calls}
+            "tool_calls": calls, "stop_reason": reply.get("stop_reason")}
 
 
 class AnthropicClient:
@@ -161,7 +161,12 @@ class AnthropicClient:
         if tools:
             body["tools"] = [to_anthropic_tool(t) for t in tools]
         headers = {"x-api-key": self._key, "anthropic-version": ANTHROPIC_VERSION}
-        return from_anthropic(_post(ANTHROPIC_URL, headers, body, 300))
+        reply = _post(ANTHROPIC_URL, headers, body, 300)
+        message = from_anthropic(reply)
+        if not message["content"].strip() and not message["tool_calls"]:
+            # e.g. stop_reason "refusal": the provider's safety filters blocked the answer
+            log.warning("Empty cloud reply: stop_reason=%s usage=%s", reply.get("stop_reason"), reply.get("usage"))
+        return message
 
 
 def get_client(provider, index):

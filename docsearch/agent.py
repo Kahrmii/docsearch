@@ -69,16 +69,27 @@ def _tool_results(messages):
     return [(names.get(m.get("tool_call_id"), "tool"), m["content"]) for m in messages if m["role"] == "tool"]
 
 
-def _answer_or_fallback(client, messages, budget, used_tools):
+def _answer_or_fallback(client, messages, budget, used_tools, stop_reason=None):
     """The model said nothing. Ask again with more randomness and ever shorter tool results; if it still stays
-    silent, show what the tools returned, so the user always gets something."""
-    for factor, temperature in ((1.0, 0.6), (0.4, 0.3), (0.15, 0.3)):
-        prompt = _shrink_tool_results(messages, factor) + [{"role": "user", "content": EMPTY_ANSWER_NUDGE}]
-        reply = client.chat(trim_messages(prompt, budget), temperature=temperature)
-        text = llm.clean(reply.get("content"))
-        if text:
-            return text
-    lines = ["The model returned no answer. Tools used: " + (", ".join(used_tools) or "none") + "."]
+    silent, show what the tools returned, so the user always gets something.
+
+    A refusal (the provider's safety filters blocked the answer) is not retried: asking again only costs money."""
+    if stop_reason != "refusal":
+        for factor, temperature in ((1.0, 0.6), (0.4, 0.3), (0.15, 0.3)):
+            prompt = _shrink_tool_results(messages, factor) + [{"role": "user", "content": EMPTY_ANSWER_NUDGE}]
+            reply = client.chat(trim_messages(prompt, budget), temperature=temperature)
+            text = llm.clean(reply.get("content"))
+            if text:
+                return text
+            stop_reason = reply.get("stop_reason")
+            if stop_reason == "refusal":
+                break
+    if stop_reason == "refusal":
+        lines = ["The model declined to answer (stop reason: refusal). The provider's safety filters apply to "
+                 "what the search found, for example credentials or keys. Try the local model for this question. "
+                 "Tools used: " + (", ".join(used_tools) or "none") + "."]
+    else:
+        lines = ["The model returned no answer. Tools used: " + (", ".join(used_tools) or "none") + "."]
     results = _tool_results(messages)
     if results:
         lines.append("This is what the tools returned:")
@@ -108,7 +119,8 @@ def ask(question, ctx, client, history=None, on_step=None, max_steps=MAX_STEPS):
         reply = client.chat(trim_messages(messages, budget), tools=None if last else tools.TOOLS)
         calls = reply.get("tool_calls") or []
         if not calls:
-            return llm.clean(reply.get("content")) or _answer_or_fallback(client, messages, budget, used_tools)
+            return llm.clean(reply.get("content")) or _answer_or_fallback(
+                client, messages, budget, used_tools, reply.get("stop_reason"))
         messages.append({"role": "assistant", "content": reply.get("content") or "", "tool_calls": calls})
         for call in calls:
             function = call["function"]
