@@ -9,11 +9,12 @@ The address contains a random token; only this address works. Stop with Ctrl+C."
 import argparse
 import webbrowser
 
-from docsearch import config, webserver
+from docsearch import __version__, config, webserver
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--version", action="version", version="docsearch " + __version__)
     ap.add_argument("--port", type=int, default=8765, help="port on 127.0.0.1 (default 8765, next free one if busy)")
     ap.add_argument("--no-browser", action="store_true", help="only print the address")
     args = ap.parse_args()

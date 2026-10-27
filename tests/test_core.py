@@ -154,6 +154,35 @@ class EmptyAnswerTest(unittest.TestCase):
         self.assertEqual(shrunk[1]["content"], "short")
 
 
+class CitationCheckTest(unittest.TestCase):
+    def ask(self, answer):
+        client = FakeClient(tool_call_reply("count_documents", {"query": "x"}), answer)
+
+        ctx = tools.Context(CountingEs(), "x", 8000)
+        return agent.ask("Question?", ctx, client)
+
+    def messages(self, result):
+        return [{"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "t"}}]},
+                {"role": "tool", "tool_call_id": "c1", "content": result}]
+
+    def test_invented_source_is_flagged(self):
+        missing = agent.unverified_citations("See [made_up.pdf] and [real.pdf].",
+                                             self.messages('{"filename": "real.pdf"}'))
+        self.assertEqual(missing, ["made_up.pdf"])
+
+    def test_known_sources_and_brackets_without_files_pass(self):
+        answer = "Found in [real.pdf] and [mails.mbox#12]; also [see below] and [1]."
+        result = '{"filename": "real.pdf"} {"filename": "mails.mbox#12"}'
+        self.assertEqual(agent.unverified_citations(answer, self.messages(result)), [])
+
+    def test_answer_gets_a_warning_line(self):
+        answer = self.ask("It is in [ghost.docx].")
+        self.assertIn("ghost.docx", answer.split("Warning:")[1])
+
+    def test_clean_answer_is_unchanged(self):
+        self.assertEqual(self.ask("Seven documents."), "Seven documents.")
+
+
 class ScanFilesTest(unittest.TestCase):
     def test_flat_recursive_and_skips(self):
         with tempfile.TemporaryDirectory() as d:

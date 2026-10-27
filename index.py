@@ -6,13 +6,14 @@ import signal
 import sys
 import threading
 
-from docsearch import config, indexing, services
+from docsearch import __version__, config, indexing, services
 from docsearch.es import EsError
 
 
 def main():
     d = indexing.Options(data_dir="")
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--version", action="version", version="docsearch " + __version__)
     ap.add_argument("data_dir", nargs="?", default=config.get("DATA_DIR"), help="folder containing the documents")
     ap.add_argument("--index", default=d.index, help="index name (default: documents)")
     ap.add_argument("--recursive", action="store_true", help="include subfolders")

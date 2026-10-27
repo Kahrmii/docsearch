@@ -8,7 +8,7 @@ import tkinter as tk
 import traceback
 from tkinter import messagebox, ttk
 
-from docsearch import config, services
+from docsearch import __version__, config, services
 from docsearch.ui_chat import ChatTab
 from docsearch.ui_common import Settings
 from docsearch.ui_index import IndexTab
@@ -17,7 +17,7 @@ from docsearch.ui_index import IndexTab
 class App(tk.Tk):
     def __init__(self, first_run=False):
         super().__init__()
-        self.title("docsearch")
+        self.title("docsearch " + __version__)
         self.geometry("820x620")
         settings = Settings()
         self.docker_status = tk.StringVar(

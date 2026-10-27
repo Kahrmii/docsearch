@@ -11,13 +11,14 @@ import argparse
 import json
 import sys
 
-from docsearch import agent, cloud_policy, config, llm, secrets_check, tools
+from docsearch import __version__, agent, cloud_policy, config, llm, secrets_check, tools
 from docsearch.es import Es, EsError
 from docsearch.llm import LlmError
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--version", action="version", version="docsearch " + __version__)
     ap.add_argument("question", nargs="?")
     ap.add_argument("--index", default="documents", help="index to search (default: documents)")
     ap.add_argument("--provider", choices=sorted(llm.PROVIDER_LABELS), default=config.LLM_PROVIDER,

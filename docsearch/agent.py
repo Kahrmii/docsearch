@@ -1,5 +1,6 @@
 """Agent loop: the model calls tools until it can answer."""
 import json
+import re
 
 from . import config, llm, tools
 from .tools import Cancelled
@@ -103,13 +104,44 @@ def _answer_or_fallback(client, messages, budget, used_tools, stop_reason=None):
     return "\n".join(lines)
 
 
+_CITATION = re.compile(r"\[([^\[\]\n]{3,200}?\.[A-Za-z0-9]{1,8}(?:#\d+)?)\]")
+
+
+def unverified_citations(answer, messages):
+    """Quoted [file names] of the answer that appear in none of the tool results (invented sources).
+
+    Earlier rounds count as evidence too, so a follow-up may quote a file found before."""
+    evidence = "\n".join([content for _, content in _tool_results(messages)]
+                         + [m["content"] for m in messages if m["role"] == "assistant" and m.get("content")])
+    missing = []
+    for name in _CITATION.findall(answer):
+        if name not in evidence and name not in missing:
+            missing.append(name)
+    return missing
+
+
+def check_citations(answer, messages):
+    """Append a warning for sources the model quoted without having seen them."""
+    missing = unverified_citations(answer, messages)
+    if not missing:
+        return answer
+    return (answer + "\n\nWarning: these quoted sources do not appear in any search result and may be "
+            "invented: " + ", ".join(missing))
+
+
 def ask(question, ctx, client, history=None, on_step=None, max_steps=MAX_STEPS):
     """Answer a question with the given LLM client (local or cloud).
 
     `on_step(name, args)` reports every tool call. Raises Cancelled when aborted."""
+    messages = []
+    answer = _ask(question, ctx, client, history, on_step, max_steps, messages)
+    return check_citations(answer, messages)
+
+
+def _ask(question, ctx, client, history, on_step, max_steps, messages):
     # "/no_think" is a switch of the local Qwen3 model and does not belong in cloud requests
     system = SYSTEM + ("" if client.cloud or config.LLM_THINK else "\n/no_think")
-    messages = [{"role": "system", "content": system}] + list(history or [])[-MAX_HISTORY:]
+    messages += [{"role": "system", "content": system}] + list(history or [])[-MAX_HISTORY:]
     messages.append({"role": "user", "content": question})
     budget = ctx.ctx_chars
     used_tools = []

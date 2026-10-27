@@ -66,5 +66,15 @@ class EnsureEnvTest(unittest.TestCase):
         self.assertEqual(config.elastic_password(), "with-bom")
 
 
+
+class VersionTest(unittest.TestCase):
+    def test_changelog_starts_with_the_current_version(self):
+        from docsearch import __version__
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "CHANGELOG.md"), encoding="utf-8") as f:
+            headings = [line for line in f if line.startswith("## ")]
+        self.assertEqual(headings[0].strip(), "## " + __version__)
+
+
 if __name__ == "__main__":
     unittest.main()
