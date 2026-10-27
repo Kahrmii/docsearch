@@ -27,7 +27,8 @@ class App(tk.Tk):
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
         self.chat = ChatTab(notebook, settings)
-        self.indexing = IndexTab(notebook, settings, on_finished=self.chat.refresh_indices)
+        self.indexing = IndexTab(notebook, settings, on_finished=self.chat.refresh_indices,
+                                 on_deleted=self.chat.index_deleted)
         notebook.add(self.indexing, text="Index")
         notebook.add(self.chat, text="Ask")
         self.protocol("WM_DELETE_WINDOW", self.on_close)

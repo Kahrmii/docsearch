@@ -4,17 +4,20 @@ import os
 import queue
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from . import indexing
+from . import index_admin, indexing
+from .es import Es, EsError
 from .ui_common import QueueHandler
 
 
 class IndexTab(ttk.Frame):
-    def __init__(self, master, settings, on_finished=None):
+    def __init__(self, master, settings, on_finished=None, on_deleted=None):
         super().__init__(master, padding=12)
         self.settings = settings
         self.on_finished = on_finished  # on_finished(index name) after a successful run
+        self.on_deleted = on_deleted  # on_deleted(index name) after an index was deleted
+        self.es = None
         self.q = queue.Queue()
         self.stop_event = threading.Event()
         self.folder = tk.StringVar(value=settings.get("folder", ""))
@@ -39,6 +42,9 @@ class IndexTab(ttk.Frame):
         self.btn_stop.pack(side="left", padx=6)
         self.btn_count = ttk.Button(bar, text="Count only", command=lambda: self.start(dry_run=True))
         self.btn_count.pack(side="left")
+        # deliberately apart from Start/Stop: deleting is permanent
+        self.btn_delete = ttk.Button(bar, text="Delete index ...", command=self.delete_index)
+        self.btn_delete.pack(side="right")
 
         self.bar = ttk.Progressbar(self, maximum=100)
         self.bar.grid(row=4, column=0, columnspan=3, sticky="ew")
@@ -62,7 +68,46 @@ class IndexTab(ttk.Frame):
     def set_running(self, running):
         self.btn_start.configure(state="disabled" if running else "normal")
         self.btn_count.configure(state="disabled" if running else "normal")
+        self.btn_delete.configure(state="disabled" if running else "normal")
         self.btn_stop.configure(state="normal" if running else "disabled")
+
+    def _es(self):
+        if self.es is None:
+            self.es = Es()
+        return self.es
+
+    def delete_index(self):
+        """Delete the index named in the "Index" field after a warning and the typed name."""
+        index = self.index.get().strip().lower()
+        try:
+            info = index_admin.describe(self._es(), index)
+        except ValueError as e:
+            messagebox.showerror("Delete index", str(e))
+            return
+        except index_admin.IndexNotFound:
+            existing = ", ".join(name for name, _ in self._es().indices()) or "none"
+            messagebox.showerror("Delete index", f"The index '{index}' does not exist.\nExisting indices: {existing}")
+            return
+        except (EsError, SystemExit, OSError) as e:
+            messagebox.showerror("Delete index", f"Elasticsearch is not reachable: {e}")
+            return
+        typed = simpledialog.askstring("Delete index", index_admin.warning_text(index, info)
+                                       + "\n\nType the index name to confirm:", parent=self)
+        if typed is None:  # cancelled
+            return
+        try:
+            index_admin.delete(self._es(), index, typed.strip())
+        except ValueError as e:
+            messagebox.showinfo("Delete index", str(e))
+            return
+        except (EsError, SystemExit, OSError) as e:
+            messagebox.showerror("Delete index", f"The index could not be deleted: {e}")
+            return
+        message = f"Index '{index}' deleted ({info['documents']} documents)."
+        self.status.set(message)
+        self.log(message)
+        if self.on_deleted:
+            self.on_deleted(index)
 
     def start(self, dry_run=False):
         folder, index = self.folder.get().strip(), self.index.get().strip().lower()

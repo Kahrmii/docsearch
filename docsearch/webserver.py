@@ -17,9 +17,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import cloud_policy, config, files, indexing, llm, secrets_check, services
+from . import cloud_policy, config, files, index_admin, indexing, llm, secrets_check, services
 from .chat import ChatSession
-from .es import Es, EsError
+from .es import Es, EsError, valid_index_name
 from .ui_common import QueueHandler, Settings
 
 log = logging.getLogger("docsearch.web")
@@ -210,7 +210,7 @@ def api_index_start(state, query, body):
     folder, index = _text(body, "folder"), _text(body, "index").lower()
     if not Path(folder).is_dir():
         raise BadRequest("Please choose an existing folder.")
-    if not indexing.valid_index_name(index):
+    if not valid_index_name(index):
         raise BadRequest("Index name: only lowercase letters, digits, _ and -.")
     recursive = bool(body.get("recursive"))
     state.settings.update(folder=folder, index=index, recursive=recursive)
@@ -228,6 +228,37 @@ def api_index_stop(state, query, body):
 
 def api_index_status(state, query, body):
     return 200, state.index_run.snapshot(int(query.get("since", 0) or 0))
+
+
+def api_index_info(state, query, body):
+    """Facts and the warning text for deleting an index."""
+    index = query.get("index", "").strip().lower()
+    try:
+        info = index_admin.describe(state.es(), index)
+    except ValueError as e:
+        raise BadRequest(str(e)) from e
+    except index_admin.IndexNotFound:
+        return 404, {"error": f"The index '{index}' does not exist."}
+    except (EsError, SystemExit, OSError) as e:
+        return 502, {"error": f"Elasticsearch is not reachable: {e}"}
+    return 200, {**info, "warning": index_admin.warning_text(index, info)}
+
+
+def api_index_delete(state, query, body):
+    """Delete an index. The server itself requires the typed index name, so a stray call cannot delete anything."""
+    index, confirm = _text(body, "index").lower(), _text(body, "confirm")
+    if state.index_run.running:
+        return 409, {"error": "Indexing is running; stop it first."}
+    try:
+        info = index_admin.delete(state.es(), index, confirm)
+    except ValueError as e:
+        raise BadRequest(str(e)) from e
+    except index_admin.IndexNotFound:
+        return 404, {"error": f"The index '{index}' does not exist."}
+    except (EsError, SystemExit, OSError) as e:
+        return 502, {"error": f"The index could not be deleted: {e}"}
+    state.cloud_confirmed.discard(index)
+    return 200, {"ok": True, "documents": info["documents"]}
 
 
 def api_cloud(state, query, body):
@@ -294,6 +325,8 @@ ROUTES = {
     ("POST", "/api/index/start"): api_index_start,
     ("POST", "/api/index/stop"): api_index_stop,
     ("GET", "/api/index/status"): api_index_status,
+    ("GET", "/api/index/info"): api_index_info,
+    ("POST", "/api/index/delete"): api_index_delete,
     ("POST", "/api/cloud"): api_cloud,
     ("POST", "/api/chat/ask"): api_chat_ask,
     ("GET", "/api/chat/poll"): api_chat_poll,

@@ -118,7 +118,7 @@ If your documents are not English, set `OCR_LANGUAGES` (e.g. `deu+eng`) and `TEX
 
 ## Web interface
 
-Prefer the browser? `start_web.bat` (Windows) or `sh start.sh web` (Linux/macOS) – or `python web.py` – starts a small server on **localhost only** and opens the page. It offers the same functions as the window (the window stays available): tab **Ask** with conversation, tool steps, clickable sources, model choice and the cloud approval with the keys/credentials warning, and tab **Index** with folder, index name, progress and log. "Browse ..." opens the folder dialog of your computer.
+Prefer the browser? `start_web.bat` (Windows) or `sh start.sh web` (Linux/macOS) – or `python web.py` – starts a small server on **localhost only** and opens the page. It offers the same functions as the window (the window stays available): tab **Ask** with conversation, tool steps, clickable sources, model choice and the cloud approval with the keys/credentials warning, and tab **Index** with folder, index name, progress, log and **Delete index ...** (see [Deleting an index](#deleting-an-index)). "Browse ..." opens the folder dialog of your computer.
 
 ```bash
 python web.py                  # default port 8765 (next free port if busy)
@@ -141,6 +141,7 @@ Security of the web interface:
 - Choose **Folder** and **Index** (default `documents`; another name creates a separate index, useful to keep collections apart). Checkbox for subfolders.
 - **Start** starts the Docker containers if needed (Docker Desktop must be running) and shows a progress bar, errors, speed and remaining time.
 - **Stop** ends cleanly after the running batch. **Count only** lists the number of files and their types.
+- **Delete index ...** (at the right, apart from Start and Stop) deletes the index named in the "Index" field after a warning; see [Deleting an index](#deleting-an-index).
 - Starting the same folder with the same index again continues where it stopped.
 
 **Tab "Ask"**
@@ -288,8 +289,18 @@ The index is much smaller than the source because it contains only **text and me
 - **Where is the index?** In the Docker volume `docsearch_es_data` (Docker Desktop/WSL 2: in `…\AppData\Local\Docker\wsl\disk\docker_data.vhdx` on the system drive). It is not an ordinary folder.
 - `docker compose stop` / `start`: the index is kept. `docker compose down`: containers are removed, the index is kept.
 - ⚠ **Delete the index permanently:** `docker compose down -v` or `docker volume rm docsearch_es_data`.
-- **Delete one index:** `curl -X DELETE -u elastic:$ELASTIC_PASSWORD http://localhost:9200/NAME`
+- **Delete one index:** use **Delete index ...** in the window or the web interface, see [Deleting an index](#deleting-an-index). (By hand: `curl -X DELETE -u elastic:$ELASTIC_PASSWORD http://localhost:9200/NAME`)
 - **Backup:** Elasticsearch snapshots or a volume backup. Alternatively the index can be rebuilt from the originals at any time.
+
+### Deleting an index
+
+**Delete index ...** exists in the window (tab "Index", button at the right) and in the web interface (tab "Index", section at the bottom). It deletes the index and everything stored in it, **permanently**:
+
+1. Choose the index (window: type its name in the "Index" field; web: pick it in the list) and press **Delete index ...**.
+2. A warning shows the number of documents and the size, that it cannot be undone, and that your original files on disk are **not** touched (but that indexing them again can take hours for large collections).
+3. To confirm you have to **type the index name**. Cancelling or a wrong name deletes nothing.
+
+Safeguards: only plain index names are accepted (no wildcards, lists, `_all` or system indices); the web server checks the typed name itself, so a stray request cannot delete anything; deleting is refused while an indexing job is running; the index's approval for the cloud is removed together with it, so a new index of the same name does not inherit it.
 
 ## Security and privacy
 
@@ -341,6 +352,7 @@ docsearch/
 │   ├── es.py               Elasticsearch client and index mapping
 │   ├── llm.py              LLM clients: local (OpenAI-compatible) and cloud (Anthropic)
 │   ├── cloud_policy.py     per-index approval for the cloud (cloud_indices.json)
+│   ├── index_admin.py      deleting an index: validation, warning text, clean-up
 │   ├── secrets_check.py    counts documents that look like keys/credentials (cloud safeguard)
 │   ├── services.py         check and start the Docker services (first-run setup)
 │   ├── indexing.py         pipeline file -> Tika -> Elasticsearch

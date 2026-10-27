@@ -70,7 +70,9 @@
     $("docker").textContent = data.docker + (data.es_error ? "  |  " + data.es_error : "");
     if (firstLoad || changed) {
       const keepIndex = firstLoad ? data.settings.chat_index : $("ask-index").value;
-      fillSelect($("ask-index"), data.indices.map((i) => [i.name, `${i.name} (${i.documents})`]), keepIndex);
+      const labelled = data.indices.map((i) => [i.name, `${i.name} (${i.documents})`]);
+      fillSelect($("ask-index"), labelled, keepIndex);
+      fillSelect($("delete-index"), labelled, $("delete-index").value);
       if (firstLoad) {
         fillSelect($("ask-model"), data.providers.map((p) => [p.key, p.label]), data.settings.chat_provider);
         $("index-folder").value = data.settings.folder || "";
@@ -201,8 +203,24 @@
   function setIndexBusy(running) {
     $("index-start").disabled = running;
     $("index-count").disabled = running;
+    $("index-delete").disabled = running;
     $("index-stop").disabled = !running;
   }
+
+  // Deleting is permanent: the server gives the warning text, the user has to type the index name, and the
+  // server checks the typed name again.
+  $("index-delete").addEventListener("click", async () => {
+    const index = $("delete-index").value;
+    if (!index) return;
+    const info = await api(`/api/index/info?index=${encodeURIComponent(index)}`);
+    if (!info.ok) { $("index-status").textContent = info.data.error || `Error ${info.status}`; return; }
+    const typed = window.prompt(info.data.warning + "\n\nType the index name to confirm:");
+    if (typed === null) return;  // cancelled
+    const res = await api("/api/index/delete", { index, confirm: typed.trim() });
+    $("index-status").textContent = res.ok ? `Index '${index}' deleted (${res.data.documents} documents).`
+                                           : (res.data.error || `Error ${res.status}`);
+    await loadState();
+  });
 
   async function pollIndex() {
     const res = await api(`/api/index/status?since=${indexSince}`);

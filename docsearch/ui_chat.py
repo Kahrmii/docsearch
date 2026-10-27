@@ -119,7 +119,13 @@ class ChatTab(ttk.Frame):
         self.combo.configure(values=names)
         if select:
             self.index.set(select)
+        elif names and self.index.get().strip().lower() not in names:  # e.g. the index was deleted
+            self.index.set(names[0])
         self.sync_cloud_box()
+
+    def index_deleted(self, index):
+        self.cloud_confirmed.discard(index)
+        self.refresh_indices()
 
     def reset(self):
         self.session.reset()

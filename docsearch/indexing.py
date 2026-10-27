@@ -38,14 +38,6 @@ class Options:
     dry_run: bool = False
 
 
-INDEX_NAME = re.compile(r"[a-z0-9][a-z0-9_\-]*")
-
-
-def valid_index_name(name):
-    """Elasticsearch index names: lowercase letters, digits, _ and -, not starting with _ or -."""
-    return bool(INDEX_NAME.fullmatch(name))
-
-
 def scan_files(data_dir, recursive):
     """[(relative path with '/', size, mtime)], sorted."""
     entries = []

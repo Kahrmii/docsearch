@@ -13,8 +13,17 @@ from docsearch import cloud_policy, files, indexing, secrets_check, ui_common, w
 
 
 class FakeEs:
+    def __init__(self):
+        self.deleted = []
+
     def indices(self):
         return [("documents", 5), ("keys", 2)]
+
+    def index_info(self, index):
+        return {"documents": 5, "size_mb": 1} if index in ("documents", "keys") else None
+
+    def delete_index(self, index):
+        self.deleted.append(index)
 
 
 class WebTestCase(unittest.TestCase):
@@ -277,6 +286,56 @@ class IndexFlowTest(WebTestCase):
                                                                    "index": "ok"})[0], 400)
         self.assertEqual(self.request("POST", "/api/index/start", {"folder": self.tmp.name,
                                                                    "index": "Bad Name"})[0], 400)
+
+
+class IndexDeleteTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        self.start_server()
+
+    def delete(self, index, confirm=None):
+        body = {"index": index} if confirm is None else {"index": index, "confirm": confirm}
+        return self.request("POST", "/api/index/delete", body)
+
+    def test_info_gives_facts_and_the_warning(self):
+        status, data, _ = self.request("GET", "/api/index/info?index=documents")
+        self.assertEqual(status, 200)
+        self.assertEqual((data["documents"], data["size_mb"]), (5, 1))
+        self.assertIn("Permanently delete the index 'documents'", data["warning"])
+        self.assertEqual(self.request("GET", "/api/index/info?index=nope")[0], 404)
+        self.assertEqual(self.request("GET", "/api/index/info?index=*")[0], 400)
+
+    def test_the_server_requires_the_typed_name(self):
+        for confirm in (None, "", "document", "keys"):
+            self.assertEqual(self.delete("documents", confirm)[0], 400)
+        self.assertEqual(self.state._es.deleted, [])
+
+    def test_confirmed_delete_removes_index_and_approval(self):
+        cloud_policy.set_allowed("documents", True)
+        self.state.cloud_confirmed.add("documents")
+        status, data, _ = self.delete("documents", "documents")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["documents"], 5)
+        self.assertEqual(self.state._es.deleted, ["documents"])
+        self.assertFalse(cloud_policy.is_allowed("documents"))
+        self.assertNotIn("documents", self.state.cloud_confirmed)
+
+    def test_wildcards_and_unknown_indices_are_never_deleted(self):
+        self.assertEqual(self.delete("*", "*")[0], 400)
+        self.assertEqual(self.delete("_all", "_all")[0], 400)
+        self.assertEqual(self.delete("nope", "nope")[0], 404)
+        self.assertEqual(self.state._es.deleted, [])
+
+    def test_no_deleting_while_indexing_runs(self):
+        self.state.index_run.running = True
+        self.assertEqual(self.delete("documents", "documents")[0], 409)
+        self.assertEqual(self.state._es.deleted, [])
+
+    def test_the_token_is_required(self):
+        status, _, _ = self.request("POST", "/api/index/delete", {"index": "documents", "confirm": "documents"},
+                                    token=False)
+        self.assertEqual(status, 403)
+        self.assertEqual(self.state._es.deleted, [])
 
 
 if __name__ == "__main__":

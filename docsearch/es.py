@@ -1,10 +1,20 @@
 """Thin Elasticsearch client (standard library only)."""
 import base64
 import json
+import re
 import urllib.error
 import urllib.request
 
 from . import config
+
+INDEX_NAME = re.compile(r"[a-z0-9][a-z0-9_\-]*")
+
+
+def valid_index_name(name):
+    """Elasticsearch index names: lowercase letters, digits, _ and -, not starting with _ or -.
+
+    This also rules out wildcards, lists (a,b), _all and system indices (.name)."""
+    return bool(INDEX_NAME.fullmatch(name))
 
 
 def mapping():
@@ -78,6 +88,22 @@ class Es:
         """[(index name, document count)] without system indices."""
         rows = self.call("GET", "/_cat/indices?format=json&h=index,docs.count")
         return sorted((r["index"], int(r["docs.count"] or 0)) for r in rows if not r["index"].startswith("."))
+
+    def index_info(self, index):
+        """{"documents": n, "size_mb": n} of an index, or None if it does not exist."""
+        try:
+            rows = self.call("GET", f"/_cat/indices/{index}?format=json&h=docs.count,store.size&bytes=mb")
+        except EsError as e:
+            if e.status == 404:
+                return None
+            raise
+        return {"documents": int(rows[0]["docs.count"] or 0), "size_mb": int(float(rows[0]["store.size"] or 0))}
+
+    def delete_index(self, index):
+        """Delete one index by its exact name. Wildcards and lists are refused."""
+        if not valid_index_name(index):
+            raise ValueError(f"Refusing to delete '{index}': not a plain index name")
+        self.call("DELETE", f"/{index}")
 
     def existing_ids(self, index, ids):
         found = set()
