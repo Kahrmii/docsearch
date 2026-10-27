@@ -412,13 +412,19 @@
       log.append(document.createTextNode(s.log.join("\n") + "\n"));
       log.scrollTop = log.scrollHeight;
     }
+    $("job").hidden = !s.running;
     if (s.progress) {
       const p = s.progress, pct = 100 * p.done / Math.max(p.total, 1);
       $("index-progress").value = pct;
       const eta = p.eta_s ? `${Math.floor(p.eta_s / 3600)}h${String(Math.floor(p.eta_s % 3600 / 60)).padStart(2, "0")}m` : "?";
       $("index-status").textContent = `${s.kind === "embed" ? "Document" : "File"} ${p.done}/${p.total} (${pct.toFixed(1)}%) | ok ${p.ok} | errors ${p.errors} | ` +
         `skipped ${p.skipped} | ${p.rate.toFixed(2)}/s | left ${eta}`;
-    } else if (s.status) $("index-status").textContent = s.status;
+      $("job-bar").value = pct;
+      $("job-text").textContent = $("index-status").textContent;
+    } else if (s.status) {
+      $("index-status").textContent = s.status;
+      $("job-text").textContent = s.status;
+    }
     if (!s.running) {
       clearInterval(indexPoll);
       indexPoll = null;
@@ -450,6 +456,17 @@
     if (res.data.path) $("index-folder").value = res.data.path;
   });
 
+  // a job started earlier (other tab, reloaded page) keeps showing its progress
+  (async () => {
+    const res = await api("/api/index/status?since=0");
+    if (res.ok && res.data.running) {
+      $("index-log").replaceChildren();
+      indexSince = 0;
+      setIndexBusy(true);
+      indexPoll = setInterval(pollIndex, 1000);
+      pollIndex();
+    }
+  })();
   loadState();
   loadConversations();
   setInterval(loadState, 5000);

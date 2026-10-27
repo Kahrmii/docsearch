@@ -59,6 +59,8 @@ button.danger:hover:not(:disabled) { background: var(--error); color: #ffffff; }
 #status-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 #status-list li { display: flex; gap: 12px; padding: 8px 12px; border: 1px solid var(--line); border-left-width: 5px;
                   border-radius: 6px; background: var(--panel); }
+#job { display: flex; align-items: center; gap: 12px; padding: 6px 20px; }
+#job progress { flex: 0 0 240px; }
 #status-indices { border-collapse: collapse; }
 #status-indices th, #status-indices td { text-align: left; padding: 4px 16px 4px 0; border-bottom: 1px solid var(--line); }
 #status-list li strong { min-width: 130px; }
