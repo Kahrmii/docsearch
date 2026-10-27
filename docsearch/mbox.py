@@ -6,6 +6,7 @@ import datetime as dt
 import email
 import email.policy
 import email.utils
+import hashlib
 import html.parser
 import os
 import re
@@ -183,6 +184,9 @@ def build_mail_doc(raw, number, mbox_path, file_mtime, max_chars):
         "language": None,
         "indexed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "metadata": metadata,
+        "ocr_pages": None,
+        "content_hash": hashlib.sha256(("id:" + metadata["message_id"]).encode("utf-8", "replace")
+                                       if metadata.get("message_id") else raw).hexdigest(),
         "mail_from": senders[0][1] if senders else None,
         "mail_to": [addr for _, addr in to],
         "mail_cc": [addr for _, addr in cc],

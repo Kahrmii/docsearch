@@ -24,6 +24,8 @@ def main():
     ap.add_argument("--batch-size", type=int, default=d.batch_size)
     ap.add_argument("--timeout", type=int, default=d.timeout, help="seconds per file")
     ap.add_argument("--max-chars", type=int, default=d.max_chars, help="truncate text per document")
+    ap.add_argument("--keep-duplicates", dest="skip_duplicates", action="store_false",
+                    help="also index files and mails whose content is already in the index")
     ap.add_argument("--max-file-mb", type=int, default=d.max_file_mb, help="skip larger files (0 = no limit)")
     ap.add_argument("--skip-failed", action="store_true", help="do not retry files that failed before")
     ap.add_argument("--dry-run", action="store_true", help="only count, write nothing")

@@ -198,6 +198,10 @@ class FakeEs:
     def existing_ids(self, index, ids):
         return {i for i in ids if i in self.docs}
 
+    def existing_hashes(self, index, hashes):
+        stored = {d.get("content_hash") for d in self.docs.values()}
+        return {h for h in hashes if h in stored}
+
     def bulk(self, index, docs):
         self.docs.update(dict(docs))
         return {}
@@ -244,6 +248,21 @@ class IndexingRunTest(MboxTestCase):
     def test_small_batches_give_the_same_result(self):
         self.run_index(batch_size=2)
         self.assertEqual(len(self.es.docs), 6)
+
+    def test_the_same_mails_in_a_second_mailbox_are_duplicates(self):
+        (self.dir / "all_mail.mbox").write_bytes(SAMPLE)
+        stats = self.run_index()
+        self.assertEqual(stats["duplicates"], 5)
+        self.assertEqual(len(self.es.docs), 6)  # one copy of every mail + the note
+
+    def test_duplicates_can_be_kept(self):
+        (self.dir / "all_mail.mbox").write_bytes(SAMPLE)
+        stats = self.run_index(skip_duplicates=False)
+        self.assertEqual((stats["duplicates"], len(self.es.docs)), (0, 11))
+
+    def test_mail_hash_follows_the_message_id(self):
+        self.assertEqual(self.doc(1)["content_hash"], self.doc(1)["content_hash"])
+        self.assertNotEqual(self.doc(1)["content_hash"], self.doc(2)["content_hash"])
 
     def test_limit_counts_files_and_mails(self):
         stats = self.run_index(limit=3)

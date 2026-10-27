@@ -183,6 +183,41 @@ class CitationCheckTest(unittest.TestCase):
         self.assertEqual(self.ask("Seven documents."), "Seven documents.")
 
 
+class DuplicatesTest(unittest.TestCase):
+    class FakeEs:
+        def __init__(self, known=()):
+            self.known = set(known)
+
+        def existing_hashes(self, index, hashes):
+            return {h for h in hashes if h in self.known}
+
+    def test_second_copy_in_the_batch_and_indexed_ones_are_duplicates(self):
+        es = self.FakeEs(known=["old"])
+        seen = set()
+        new, dup = indexing.split_duplicates(es, "x", [("a", "h1"), ("b", "h1"), ("c", "old"), ("d", "h2")], seen)
+        self.assertEqual((new, dup), (["a", "d"], ["b", "c"]))
+        self.assertEqual(seen, {"h1", "h2"})
+
+    def test_hashes_of_earlier_batches_count(self):
+        new, dup = indexing.split_duplicates(self.FakeEs(), "x", [("a", "h1")], {"h1"})
+        self.assertEqual((new, dup), ([], ["a"]))
+
+    def test_items_without_a_hash_are_never_duplicates(self):
+        new, dup = indexing.split_duplicates(self.FakeEs(), "x", [("a", None), ("b", None)], set())
+        self.assertEqual((new, dup), (["a", "b"], []))
+
+    def test_same_content_gives_the_same_file_hash(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths = []
+            for name, data in (("a.txt", b"same"), ("b.txt", b"same"), ("c.txt", b"other")):
+                paths.append(os.path.join(d, name))
+                with open(paths[-1], "wb") as f:
+                    f.write(data)
+            a, b, c = (indexing.file_hash(p) for p in paths)
+            self.assertEqual(a, b)
+            self.assertNotEqual(a, c)
+
+
 class ScanFilesTest(unittest.TestCase):
     def test_flat_recursive_and_skips(self):
         with tempfile.TemporaryDirectory() as d:

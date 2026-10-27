@@ -1,6 +1,7 @@
 """Pipeline: files -> Tika (text + OCR + metadata) -> Elasticsearch."""
 import concurrent.futures as cf
 import datetime as dt
+import hashlib
 import json
 import logging
 import os
@@ -35,6 +36,7 @@ class Options:
     max_chars: int = 10_000_000      # truncate text per document
     max_file_mb: int = 100           # skip larger files (0 = no limit)
     skip_failed: bool = False
+    skip_duplicates: bool = True     # same file content / same mail (Message-ID) is indexed only once
     dry_run: bool = False
 
 
@@ -79,11 +81,20 @@ def tika_extract(path, timeout, retries=3):
     raise RuntimeError(f"Tika unreachable or timed out: {last}")
 
 
+def file_hash(path):
+    """SHA-256 of the file content (read in pieces)."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for piece in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(piece)
+    return digest.hexdigest()
+
+
 def _first(value):
     return (value[0] if value else None) if isinstance(value, list) else value
 
 
-def build_doc(rel, size, mtime, data_dir, timeout, max_chars):
+def build_doc(rel, size, mtime, data_dir, timeout, max_chars, content_hash=None):
     full = os.path.join(data_dir, rel)
     result = tika_extract(full, timeout)
     meta = result[0] if isinstance(result, list) and result else {}
@@ -97,6 +108,10 @@ def build_doc(rel, size, mtime, data_dir, timeout, max_chars):
         pages = int(_first(metadata.get("xmpTPg:NPages") or metadata.get("meta:page-count")))
     except (TypeError, ValueError):
         pages = None
+    try:
+        ocr_pages = int(_first(metadata.get("pdf:ocr-page-count")))
+    except (TypeError, ValueError):
+        ocr_pages = None
     return {
         "filename": os.path.basename(rel),
         "path": full.replace("\\", "/"),
@@ -113,7 +128,24 @@ def build_doc(rel, size, mtime, data_dir, timeout, max_chars):
         "language": _first(metadata.get("language")),
         "indexed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "metadata": metadata,
+        "ocr_pages": ocr_pages,
+        "content_hash": content_hash,
     }
+
+
+def split_duplicates(es, index, hashed, seen):
+    """hashed: [(item, content hash)]. Returns (new items, duplicate items). A duplicate has the hash of an item
+    earlier in the list, of one written during this run (`seen`) or of a document already in the index."""
+    known = es.existing_hashes(index, {h for _, h in hashed if h and h not in seen})
+    new, duplicates = [], []
+    for item, content_hash in hashed:
+        if content_hash and (content_hash in seen or content_hash in known):
+            duplicates.append(item)
+        else:
+            if content_hash:
+                seen.add(content_hash)
+            new.append(item)
+    return new, duplicates
 
 
 def _log_error(doc_id, message):
@@ -168,6 +200,17 @@ def _bulk(es, index, docs, stats):
     stats["ok"] += len(docs) - len(rejected)
 
 
+def _drop_duplicate_files(es, index, batch, data_dir, seen_hashes, stats, workers):
+    """Hash the files of the batch and drop those whose content is already indexed. Returns (rest, {rel: hash})."""
+    with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+        hashes = dict(zip((e[0] for e in batch), pool.map(lambda e: file_hash(os.path.join(data_dir, e[0])), batch)))
+    new, duplicates = split_duplicates(es, index, [(e, hashes[e[0]]) for e in batch], seen_hashes)
+    stats["duplicates"] += len(duplicates)
+    for rel, _, _ in duplicates:
+        log.info("Duplicate (same content already indexed): %s", rel)
+    return new, hashes
+
+
 def _mail_batch(es, index, opts, path, prefix, rel, mtime, batch, failed, stats, ctx):
     """Index one batch of (number, raw message) of a mailbox. Returns False when the run has to end."""
     if ctx["should_stop"]():
@@ -188,6 +231,9 @@ def _mail_batch(es, index, opts, path, prefix, rel, mtime, batch, failed, stats,
         except Exception as ex:  # one broken message must not end the run
             stats["errors"] += 1
             _log_error(ids[number], f"Cannot read message: {ex}")
+    if docs and opts.skip_duplicates:
+        docs, duplicates = split_duplicates(es, index, [(d, d[1].get("content_hash")) for d in docs], ctx["seen_hashes"])
+        stats["duplicates"] += len(duplicates)
     if docs:
         _bulk(es, index, docs, stats)
     ctx["processed"] += len(todo)
@@ -226,7 +272,8 @@ def run_job(opts, on_progress=None, should_stop=None, on_status=None):
     if opts.dry_run:
         return f"{stats['total']} files found.", None
     message = ("Stopped. " if stats["stopped"] else "Done. ") + \
-              f"ok {stats['ok']}, errors {stats['errors']}, skipped {stats['skipped']}."
+              f"ok {stats['ok']}, errors {stats['errors']}, skipped {stats['skipped']}" + \
+              (f", duplicates {stats['duplicates']}." if stats["duplicates"] else ".")
     return message, opts.index.strip().lower()
 
 
@@ -245,7 +292,9 @@ def run(opts, on_progress=None, should_stop=None):
 
     entries = scan_files(data_dir, opts.recursive)
     log.info("%d files in %s", len(entries), data_dir)
-    stats = {"total": len(entries), "ok": 0, "errors": 0, "skipped": 0, "seconds": 0, "stopped": False}
+    stats = {"total": len(entries), "ok": 0, "errors": 0, "skipped": 0, "duplicates": 0, "ocr_files": 0,
+             "seconds": 0, "stopped": False}
+    seen_hashes = set()  # content hashes written during this run (the index only sees them after a refresh)
     if opts.dry_run:
         for ext, n in Counter(os.path.splitext(r)[1].lower() or "(none)" for r, _, _ in entries).most_common(12):
             log.info("  %-10s %d", ext, n)
@@ -307,13 +356,18 @@ def run(opts, on_progress=None, should_stop=None):
 
         docs = []
         if batch:
+            hashes = {}
+            if opts.skip_duplicates:
+                batch, hashes = _drop_duplicate_files(es, index, batch, data_dir, seen_hashes, stats, opts.workers)
             with cf.ThreadPoolExecutor(max_workers=opts.workers) as pool:
-                futures = {pool.submit(build_doc, rel, size, mtime, data_dir, opts.timeout, opts.max_chars): rel
+                futures = {pool.submit(build_doc, rel, size, mtime, data_dir, opts.timeout, opts.max_chars,
+                                       hashes.get(rel)): rel
                            for rel, size, mtime in batch}
                 for future in cf.as_completed(futures):
                     rel = futures[future]
                     try:
                         docs.append((doc_id(rel), future.result()))
+                        stats["ocr_files"] += 1 if docs[-1][1].get("ocr_pages") else 0
                     except Exception as ex:  # one broken file must not end the run
                         stats["errors"] += 1
                         _log_error(doc_id(rel), str(ex))
@@ -327,12 +381,13 @@ def run(opts, on_progress=None, should_stop=None):
             _log_progress(stats, done, n_total, rate, eta)
 
     if mailboxes and not stats["stopped"] and (opts.limit is None or processed < opts.limit):
-        ctx = {"seen": 0, "processed": processed, "base": pos, "n_total": n_total, "start": start,
+        ctx = {"seen": 0, "processed": processed, "seen_hashes": seen_hashes, "base": pos, "n_total": n_total, "start": start,
                "on_progress": on_progress, "should_stop": should_stop}
         _index_mailboxes(es, index, opts, data_dir, prefix, mailboxes, failed, stats, ctx)
 
     es.call("POST", f"/{index}/_refresh")
     stats["seconds"] = time.time() - start
-    log.info("Done: ok %d, errors %d, skipped %d, duration %s",
-             stats["ok"], stats["errors"], stats["skipped"], _format_eta(stats["seconds"]))
+    log.info("Done: ok %d, errors %d, skipped %d, duplicates %d, OCR used for %d files, duration %s",
+             stats["ok"], stats["errors"], stats["skipped"], stats["duplicates"], stats["ocr_files"],
+             _format_eta(stats["seconds"]))
     return stats

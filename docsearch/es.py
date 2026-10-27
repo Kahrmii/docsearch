@@ -31,6 +31,13 @@ MAIL_PROPERTIES = {
 }
 
 
+# fields added after the first release: existing indices get them via ensure_extra_fields
+EXTRA_PROPERTIES = {
+    "ocr_pages": {"type": "integer"},        # pages Tika had to OCR (scans)
+    "content_hash": {"type": "keyword"},     # SHA-256 of the file (mails: of the Message-ID), finds duplicates
+}
+
+
 def mapping():
     return {
         "settings": {"number_of_shards": 1, "number_of_replicas": 0, "refresh_interval": "30s"},
@@ -52,6 +59,7 @@ def mapping():
                 "indexed_at": {"type": "date"},
                 # all Tika metadata, kept in _source only (not indexed)
                 "metadata": {"type": "object", "enabled": False},
+                **EXTRA_PROPERTIES,
                 **MAIL_PROPERTIES,
             }
         },
@@ -92,10 +100,12 @@ class Es:
         """Create the index if it does not exist. Returns True if it was created."""
         try:
             self.call("GET", f"/{index}")
-            return False
         except EsError as e:
             if e.status != 404:
                 raise
+        else:
+            self.call("PUT", f"/{index}/_mapping", {"properties": EXTRA_PROPERTIES})  # older indices lack them
+            return False
         self.call("PUT", f"/{index}", mapping())
         return True
 
@@ -129,6 +139,17 @@ class Es:
         for i in range(0, len(ids), 500):
             result = self.call("POST", f"/{index}/_mget?_source=false", {"ids": ids[i:i + 500]})
             found.update(d["_id"] for d in result["docs"] if d.get("found"))
+        return found
+
+    def existing_hashes(self, index, hashes):
+        """Which of the content hashes are already in the index."""
+        found = set()
+        hashes = list(hashes)
+        for i in range(0, len(hashes), 500):
+            part = hashes[i:i + 500]
+            result = self.search(index, {"size": len(part) * 2, "_source": ["content_hash"],
+                                         "query": {"terms": {"content_hash": part}}})
+            found.update(h["_source"]["content_hash"] for h in result["hits"]["hits"])
         return found
 
     def bulk(self, index, docs):
