@@ -1,4 +1,5 @@
 """Tests for the first-run setup (.env creation) without touching the real .env."""
+import inspect
 import os
 import tempfile
 import unittest
@@ -6,6 +7,15 @@ from pathlib import Path
 from unittest import mock
 
 from docsearch import config
+
+
+class DefaultAddressTest(unittest.TestCase):
+    def test_service_defaults_use_the_ipv4_address(self):
+        # "localhost" costs about 2 seconds per request on Windows (IPv6 is tried first), so the defaults must not use it
+        source = inspect.getsource(config)
+        for default in ("http://127.0.0.1:9200", "http://127.0.0.1:9998", "http://127.0.0.1:1234"):
+            self.assertIn(f'"{default}"', source)
+        self.assertNotIn('"http://localhost:', source)
 
 
 class EnsureEnvTest(unittest.TestCase):

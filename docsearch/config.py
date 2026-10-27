@@ -55,9 +55,11 @@ def _local_url(name, default):
     return url
 
 
-ES_URL = _local_url("ES_URL", "http://localhost:9200")
-TIKA_URL = _local_url("TIKA_URL", "http://localhost:9998")
-LLM_BASE_URL = _local_url("LLM_BASE_URL", "http://localhost:1234")
+# 127.0.0.1 and not "localhost": on Windows "localhost" first tries IPv6 (::1) and waits about 2 seconds for the
+# timeout before it falls back to IPv4, which made EVERY request take 2 seconds longer.
+ES_URL = _local_url("ES_URL", "http://127.0.0.1:9200")
+TIKA_URL = _local_url("TIKA_URL", "http://127.0.0.1:9998")
+LLM_BASE_URL = _local_url("LLM_BASE_URL", "http://127.0.0.1:1234")
 LLM_MODEL = get("LLM_MODEL", "qwen/qwen3-14b")
 LLM_THINK = get("LLM_THINK", "0") == "1"  # Qwen3 thinking mode: more accurate but much slower
 LLM_PROVIDER = get("LLM_PROVIDER", "local")  # "local" (LM Studio, ...) or "anthropic" (cloud)
