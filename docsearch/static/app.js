@@ -351,6 +351,7 @@
   function setIndexBusy(running) {
     $("index-start").disabled = running;
     $("index-count").disabled = running;
+    $("embed-start").disabled = running;
     $("index-delete").disabled = running;
     $("index-stop").disabled = !running;
   }
@@ -370,6 +371,18 @@
     await loadState();
   });
 
+  async function startEmbed() {
+    const res = await api("/api/embed/start", { index: $("index-name").value.trim().toLowerCase() });
+    if (!res.ok) { $("index-status").textContent = res.data.error || `Error ${res.status}`; return; }
+    $("index-log").replaceChildren();
+    $("index-progress").value = 0;
+    indexSince = 0;
+    setIndexBusy(true);
+    indexPoll = setInterval(pollIndex, 1000);
+    pollIndex();
+  }
+  $("embed-start").addEventListener("click", startEmbed);
+
   async function pollIndex() {
     const res = await api(`/api/index/status?since=${indexSince}`);
     if (!res.ok) return;
@@ -384,7 +397,7 @@
       const p = s.progress, pct = 100 * p.done / Math.max(p.total, 1);
       $("index-progress").value = pct;
       const eta = p.eta_s ? `${Math.floor(p.eta_s / 3600)}h${String(Math.floor(p.eta_s % 3600 / 60)).padStart(2, "0")}m` : "?";
-      $("index-status").textContent = `File ${p.done}/${p.total} (${pct.toFixed(1)}%) | ok ${p.ok} | errors ${p.errors} | ` +
+      $("index-status").textContent = `${s.kind === "embed" ? "Document" : "File"} ${p.done}/${p.total} (${pct.toFixed(1)}%) | ok ${p.ok} | errors ${p.errors} | ` +
         `skipped ${p.skipped} | ${p.rate.toFixed(2)}/s | left ${eta}`;
     } else if (s.status) $("index-status").textContent = s.status;
     if (!s.running) {

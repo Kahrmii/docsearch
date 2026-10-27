@@ -2,6 +2,13 @@
 
 All notable changes. The version is in `docsearch/__init__.py` (`python web.py --version`).
 
+## 0.8.0
+
+- Semantic search (optional, per index): "Create embeddings" in the window and the web page, or
+  `python index.py --index NAME --embed`. Documents are cut into chunks, embedded with a local model in LM Studio
+  and stored in a nested `dense_vector` field; indices with vectors give the agent the tool `semantic_search`.
+  Existing indices are extended in place (no re-indexing). The Status tab shows whether the embedding model is loaded.
+
 ## 0.7.0
 
 - Installable with pip: `pip install git+https://github.com/Kahrmii/docsearch.git` gives the commands `docsearch`

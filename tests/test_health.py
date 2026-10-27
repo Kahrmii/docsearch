@@ -98,6 +98,7 @@ class MiscTest(unittest.TestCase):
                 mock.patch.object(health, "check_containers", return_value=health._check("C", health.OK, "")), \
                 mock.patch.object(health, "check_indices", return_value=health._check("I", health.OK, "")), \
                 mock.patch.object(health, "check_llm", return_value=health._check("L", health.OK, "")), \
+                mock.patch.object(health, "check_embeddings", return_value=health._check("M", health.OK, "")), \
                 mock.patch.object(health, "check_cloud", return_value=health._check("K", health.OK, "")):
             checks = health.run_checks()
         self.assertEqual(health.overall(checks), health.ERROR)

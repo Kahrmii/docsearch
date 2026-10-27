@@ -112,6 +112,22 @@ def check_llm():
     return _check("Local model", OK, detail)
 
 
+def check_embeddings():
+    """The embedding model for the semantic search (only needed to create vectors and to ask with them)."""
+    try:
+        models = _get_json(config.LLM_BASE_URL + "/api/v0/models")["data"]
+    except Exception:
+        return _check("Embedding model", OK, "LM Studio not reachable (only needed for the semantic search)")
+    match = next((m for m in models if m["id"] == config.EMBED_MODEL), None)
+    if match is None:
+        return _check("Embedding model", OK, f"{config.EMBED_MODEL} is not installed in LM Studio "
+                                              "(only needed for the semantic search)")
+    if match.get("state") != "loaded":
+        return _check("Embedding model", OK, f"{config.EMBED_MODEL} is installed but not loaded; load it before "
+                                              "creating embeddings or asking with the semantic search")
+    return _check("Embedding model", OK, f"{config.EMBED_MODEL} loaded")
+
+
 def check_cloud():
     if config.get("ANTHROPIC_API_KEY"):
         return _check("Cloud model", OK, f"API key is set; model {config.ANTHROPIC_MODEL}")  # the key is never shown
@@ -140,7 +156,8 @@ def check_indices(es=None):
 def run_checks():
     """All checks, in display order."""
     checks = []
-    for check in (check_config, check_elasticsearch, check_tika, check_containers, check_indices, check_llm, check_cloud):
+    for check in (check_config, check_elasticsearch, check_tika, check_containers, check_indices, check_llm,
+                  check_embeddings, check_cloud):
         try:
             checks.append(check())
         except Exception as e:  # a check must never take the overview down

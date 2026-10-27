@@ -109,6 +109,9 @@ def _int(name, default):
 INDEX_WORKERS = _int("INDEX_WORKERS", 4)          # parallel Tika requests (mind Tika's memory)
 INDEX_BATCH_SIZE = _int("INDEX_BATCH_SIZE", 50)   # files per Elasticsearch write and resume check
 SAVE_CONVERSATIONS = get("SAVE_CONVERSATIONS", "1") != "0"  # keep conversations in conversations/
+EMBED_MODEL = get("EMBED_MODEL", "text-embedding-nomic-embed-text-v1.5")  # embedding model in LM Studio
+EMBED_CHUNK_CHARS = _int("EMBED_CHUNK_CHARS", 1500)  # characters per chunk (about 400 tokens)
+EMBED_MAX_CHUNKS = _int("EMBED_MAX_CHUNKS", 24)      # chunks per document (the first ones)
 MAX_FILE_MB = _int("MAX_FILE_MB", 100)            # larger files are skipped (0 = no limit)
 
 # settings that can be changed while the program runs (see preferences.py): name -> conversion of the text value

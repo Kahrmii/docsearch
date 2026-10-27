@@ -434,5 +434,32 @@ class ConversationApiTest(WebTestCase):
         self.assertEqual(len(conversations.listing()), 1)
 
 
+class EmbedApiTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        self.start_server()
+
+    def test_embedding_job_runs_like_an_indexing_job(self):
+        def fake_job(index, on_progress=None, should_stop=None, on_status=None, **kw):
+            on_progress({"done": 2, "total": 2, "ok": 2, "errors": 0, "skipped": 0, "rate": 1.0, "eta_s": 0})
+            return f"Done. vectors for 2 documents in {index}."
+
+        with mock.patch.object(webserver.embed_job, "run_job", fake_job):
+            self.assertEqual(self.request("POST", "/api/embed/start", {"index": "documents"})[0], 200)
+            self.assertTrue(self.wait_until(lambda: not self.state.index_run.running))
+        _, status, _ = self.request("GET", "/api/index/status?since=0")
+        self.assertEqual((status["kind"], status["message"]), ("embed", "Done. vectors for 2 documents in documents."))
+        self.assertEqual(status["progress"]["done"], 2)
+
+    def test_bad_names_and_a_running_job_are_refused(self):
+        self.assertEqual(self.request("POST", "/api/embed/start", {"index": "../x"})[0], 400)
+        self.assertEqual(self.request("POST", "/api/embed/start", {"index": "*"})[0], 400)
+        self.state.index_run.running = True
+        self.assertEqual(self.request("POST", "/api/embed/start", {"index": "documents"})[0], 409)
+
+    def test_the_token_is_required(self):
+        self.assertEqual(self.request("POST", "/api/embed/start", {"index": "documents"}, token=False)[0], 403)
+
+
 if __name__ == "__main__":
     unittest.main()

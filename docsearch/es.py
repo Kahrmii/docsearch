@@ -5,7 +5,7 @@ import re
 import urllib.error
 import urllib.request
 
-from . import config
+from . import config, embeddings
 
 INDEX_NAME = re.compile(r"[a-z0-9][a-z0-9_\-]*")
 
@@ -140,6 +140,37 @@ class Es:
             result = self.call("POST", f"/{index}/_mget?_source=false", {"ids": ids[i:i + 500]})
             found.update(d["_id"] for d in result["docs"] if d.get("found"))
         return found
+
+    def bulk_update(self, index, updates):
+        """updates: [(id, partial document)]. Returns {id: error text} for the rejected ones."""
+        lines = []
+        for doc_id, doc in updates:
+            lines.append(json.dumps({"update": {"_index": index, "_id": doc_id}}))
+            lines.append(json.dumps({"doc": doc}, ensure_ascii=False))
+        result = self.call("POST", "/_bulk", "\n".join(lines) + "\n", ndjson=True, timeout=300)
+        return {item["update"]["_id"]: json.dumps(item["update"]["error"])[:500]
+                for item in result["items"] if item["update"].get("error")}
+
+    def vector_dims(self, index):
+        """Dimensions of the stored vectors, or None if the index has no vector field yet."""
+        properties = self.call("GET", f"/{index}/_mapping")[index]["mappings"].get("properties", {})
+        return properties.get("chunks", {}).get("properties", {}).get("vector", {}).get("dims")
+
+    def ensure_vector_fields(self, index, dims):
+        """Add the vector fields (additive). Refuses vectors of another size than the ones already stored."""
+        existing = self.vector_dims(index)
+        if existing is not None and existing != dims:
+            raise EsError(f"The index '{index}' stores vectors with {existing} dimensions, but the embedding model "
+                          f"returns {dims}. Use the same model as before, or delete the index and start again.")
+        if existing is None:
+            self.call("PUT", f"/{index}/_mapping", {"properties": embeddings.vector_properties(dims)})
+
+    def embedding_stats(self, index):
+        """{"embedded": documents with vectors, "missing": documents without, "dims"}."""
+        total = self.count(index, {"match_all": {}})
+        embedded = self.count(index, {"range": {"embedded_chunks": {"gt": 0}}}) if self.vector_dims(index) else 0
+        done = self.count(index, {"exists": {"field": "embedded_chunks"}}) if self.vector_dims(index) else 0
+        return {"embedded": embedded, "missing": total - done, "dims": self.vector_dims(index)}
 
     def existing_hashes(self, index, hashes):
         """Which of the content hashes are already in the index."""

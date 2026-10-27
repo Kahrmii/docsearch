@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, cloud_policy, config, conversations, files, health, index_admin, indexing, llm, preferences, secrets_check,
+from . import (__version__, cloud_policy, config, conversations, embed_job, files, health, index_admin, indexing, llm, preferences, secrets_check,
                services)
 from .chat import ChatSession
 from .es import Es, EsError, valid_index_name
@@ -109,25 +109,31 @@ class IndexRun:
         self.stop = threading.Event()
         self.q = queue.Queue()
         self.log, self.progress, self.status, self.message = [], None, "", ""
+        self.kind = "index"  # "index" (files -> index) or "embed" (vectors for the semantic search)
 
-    def start(self, opts):
+    def start(self, opts=None, embed_index=None):
+        """Start indexing (opts) or the creation of vectors for an index (embed_index). One job at a time."""
         with self.lock:
             if self.running:
                 return False
             self.running = True
         self.stop.clear()
         self.q = queue.Queue()
+        self.kind = "embed" if embed_index else "index"
         self.log, self.progress, self.status, self.message = [], None, "Starting ...", ""
-        threading.Thread(target=self._work, args=(opts,), daemon=True).start()
+        threading.Thread(target=self._work, args=(opts, embed_index), daemon=True).start()
         return True
 
-    def _work(self, opts):
+    def _work(self, opts, embed_index):
         handler = QueueHandler(self.q)
         logging.getLogger("docsearch").addHandler(handler)
+        callbacks = {"on_progress": lambda p: setattr(self, "progress", p), "should_stop": self.stop.is_set,
+                     "on_status": lambda s: setattr(self, "status", s)}
         try:
-            message, _ = indexing.run_job(opts, on_progress=lambda p: setattr(self, "progress", p),
-                                          should_stop=self.stop.is_set,
-                                          on_status=lambda s: setattr(self, "status", s))
+            if embed_index:
+                message = embed_job.run_job(embed_index, **callbacks)
+            else:
+                message, _ = indexing.run_job(opts, **callbacks)
         except Exception as ex:
             message = f"Error: {ex}"
         finally:
@@ -142,7 +148,7 @@ class IndexRun:
                 self.log.append(self.q.get_nowait()[1])
         except queue.Empty:
             pass
-        return {"running": self.running, "progress": self.progress, "status": self.status,
+        return {"running": self.running, "kind": self.kind, "progress": self.progress, "status": self.status,
                 "message": self.message, "log": self.log[since:], "next": len(self.log)}
 
 
@@ -232,6 +238,16 @@ def api_index_start(state, query, body):
     state.settings.save()
     opts = indexing.Options(data_dir=folder, index=index, recursive=recursive, dry_run=bool(body.get("dry_run")))
     if not state.index_run.start(opts):
+        return 409, {"error": "An indexing job is already running."}
+    return 200, {"ok": True}
+
+
+def api_embed_start(state, query, body):
+    """Create the vectors of an index (for the semantic search); runs like an indexing job."""
+    index = _text(body, "index").lower()
+    if not valid_index_name(index):
+        raise BadRequest("Index name: only lowercase letters, digits, _ and -.")
+    if not state.index_run.start(embed_index=index):
         return 409, {"error": "An indexing job is already running."}
     return 200, {"ok": True}
 
@@ -408,6 +424,7 @@ ROUTES = {
     ("GET", "/api/state"): api_state,
     ("GET", "/api/pick-folder"): api_pick_folder,
     ("POST", "/api/index/start"): api_index_start,
+    ("POST", "/api/embed/start"): api_embed_start,
     ("POST", "/api/index/stop"): api_index_stop,
     ("GET", "/api/index/status"): api_index_status,
     ("GET", "/api/index/info"): api_index_info,

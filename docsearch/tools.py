@@ -4,6 +4,8 @@ import json
 import re
 from collections import Counter
 
+from . import config, embeddings
+
 PATTERNS = {
     "email": re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}"),
     "url": re.compile(r"(?:https?://|www\.)[^\s<>\"'()\[\]]+", re.I),
@@ -34,6 +36,16 @@ class Context:
         self.should_stop = should_stop or (lambda: False)
         self.sources = {}
         self.scan_cache = {}
+        self._vectors = None
+
+    def has_vectors(self):
+        """Does the index have vectors (semantic search available)? Asked once per conversation turn."""
+        if self._vectors is None:
+            try:
+                self._vectors = self.es.embedding_stats(self.index)["embedded"] > 0
+            except Exception:  # no Elasticsearch (tests), unreachable, or an older client
+                self._vectors = False
+        return self._vectors
 
 
 def _clamp(value, low, high, default):
@@ -144,6 +156,35 @@ def search_documents(ctx, query=None, phrases=None, extension=None, size=8, send
         hit["excerpts"] = windows(src.get("content") or "", terms, width, per_doc)
         hits.append(hit)
     return {"hits_total": result["hits"]["total"]["value"], "hits": hits}
+
+
+def semantic_search(ctx, question, extension=None, size=6):
+    """Nearest passages by meaning (vector search over the chunks of every document)."""
+    size = _clamp(size, 1, 15, 6)
+    knn = {"field": "chunks.vector", "query_vector": embeddings.embed([question], "query")[0], "k": size,
+           "num_candidates": max(100, size * 20),
+           "inner_hits": {"size": 2, "_source": False, "fields": ["chunks.start"]}}
+    if extension:
+        knn["filter"] = {"term": {"extension": extension.lower().lstrip(".")}}
+    result = ctx.es.search(ctx.index, {"size": size, "knn": knn, "_source": SOURCE_FIELDS})
+    width = _clamp(ctx.max_result_chars // (size * 2) - 60, 200, config.EMBED_CHUNK_CHARS, 500)
+    hits = []
+    for h in result["hits"]["hits"]:
+        src = h["_source"]
+        ctx.sources[src["filename"]] = src.get("path")
+        text = src.get("content") or ""
+        excerpts = []
+        for inner in h.get("inner_hits", {}).get("chunks", {}).get("hits", {}).get("hits", []):
+            start = (inner.get("fields", {}).get("chunks") or [{}])[0].get("start", [0])
+            start = start[0] if isinstance(start, list) else start
+            excerpts.append(re.sub(r"\s+", " ", text[start:start + width]).strip())
+        hit = {"doc": src["filename"], "similarity": round(h["_score"], 3), "excerpts": excerpts or
+               [re.sub(r"\s+", " ", text[:width]).strip()]}
+        for key, field in (("subject", "mail_subject"), ("from", "mail_from"), ("date", "mail_date")):
+            if src.get(field):
+                hit[key] = src[field]
+        hits.append(hit)
+    return {"hits": hits}
 
 
 def count_documents(ctx, query=None, phrases=None, extension=None, sender=None, recipient=None, subject=None,
@@ -331,7 +372,22 @@ TOOLS = [
         ["filename"]),
 ]
 
-_FUNCS = {f.__name__: f for f in (search_documents, count_documents, count_term, find_patterns, group_by,
+SEMANTIC_TOOL = _fn(
+    "semantic_search", "Search by MEANING, not by exact words: finds passages about a topic even if the words differ "
+    "(for example 'ending a contract' also finds 'cancellation'). It always returns the nearest passages, even "
+    "if none is really relevant, so judge the excerpts and the similarity (1 = identical). For names and exact "
+    "terms use search_documents instead.",
+    {"question": {"type": "string", "description": "The topic or question, in natural language"},
+     "extension": _EXT, "size": {"type": "integer", "description": "Number of documents, 1-15, default 6"}},
+    ["question"])
+
+
+def tools_for(ctx):
+    """The tools the model may use: the semantic search only if the index has vectors."""
+    return TOOLS + [SEMANTIC_TOOL] if ctx.has_vectors() else TOOLS
+
+
+_FUNCS = {f.__name__: f for f in (semantic_search, search_documents, count_documents, count_term, find_patterns, group_by,
                                   find_files, get_document)}
 
 

@@ -18,6 +18,10 @@ Rules:
 - How often does X occur: count_term. Which email addresses/web addresses/domains/dates occur, or which most \
 often: find_patterns. Distribution by file type, author or year: group_by. What does it say about X, what did A \
 write to B: search_documents with phrases=[A, B]; to read further use get_document.
+- If the tool `semantic_search` is available, use it for questions about a topic or meaning where the exact \
+words are unknown. It always returns the nearest passages, even if none is relevant: judge them and say so \
+if they do not answer the question. For names and exact terms use `phrases` in search_documents; combine both \
+when useful.
 - Mails (imported mailboxes) are documents with the file type "mail"; their text starts with Subject, From, To \
 and Date. For mails FROM or SENT BY a person use the `sender` filter (part of the address, e.g. "anna"); for mails \
 TO a person use `recipient`. Do not use `phrases` for that: it finds the name anywhere in the text, also in mails \
@@ -153,7 +157,7 @@ def _ask(question, ctx, client, history, on_step, max_steps, messages):
         if last:
             messages.append({"role": "user", "content": "Answer now with the results you have, "
                                                         "without further tools."})
-        reply = client.chat(trim_messages(messages, budget), tools=None if last else tools.TOOLS)
+        reply = client.chat(trim_messages(messages, budget), tools=None if last else tools.tools_for(ctx))
         calls = reply.get("tool_calls") or []
         if not calls:
             return llm.clean(reply.get("content")) or _answer_or_fallback(

@@ -5,7 +5,7 @@ import signal
 import sys
 import threading
 
-from . import __version__, config, indexing, services
+from . import __version__, config, embed_job, indexing, services
 from .es import EsError
 
 
@@ -28,8 +28,12 @@ def main():
     ap.add_argument("--max-file-mb", type=int, default=d.max_file_mb, help="skip larger files (0 = no limit)")
     ap.add_argument("--skip-failed", action="store_true", help="do not retry files that failed before")
     ap.add_argument("--dry-run", action="store_true", help="only count, write nothing")
+    ap.add_argument("--embed", action="store_true",
+                    help="no folder: create the vectors of --index for the semantic search (needs the embedding "
+                         "model EMBED_MODEL loaded in LM Studio; resumable; --limit applies)")
+    ap.add_argument("--retry-failed", action="store_true", help="with --embed: also retry documents that failed")
     args = ap.parse_args()
-    if not args.data_dir:
+    if not args.data_dir and not args.embed:
         ap.error("specify a folder (or set DATA_DIR in .env)")
 
     config.setup_logging("index")
@@ -40,6 +44,17 @@ def main():
     for sig in (signal.SIGINT, getattr(signal, "SIGBREAK", None)):
         if sig is not None:
             signal.signal(sig, lambda *_: stop.set())  # finish cleanly after the running batch
+
+    if args.embed:
+        try:
+            if not services.services_up():
+                services.start_containers()
+            log.info(embed_job.run_job(args.index, should_stop=stop.is_set, limit=args.limit,
+                                       retry_failed=args.retry_failed))
+        except (RuntimeError, ValueError, EsError) as e:  # EmbeddingError is a RuntimeError
+            log.error("%s", e)
+            sys.exit(1)
+        return
 
     opts = indexing.Options(**{k: v for k, v in vars(args).items() if k in indexing.Options.__dataclass_fields__})
     try:

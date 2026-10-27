@@ -45,6 +45,7 @@ Indexing, searching and counting always run locally; there is no telemetry. Pyth
 - **Source preview** (the matching passages, marked) and **saved conversations** with Markdown export.
 - **Status tab** (Docker memory, disk, loaded model and its context) and **Settings tab** (models, OCR language, workers) in the window and the web page.
 - **Duplicates** (same file content, same mail) are indexed only once.
+- **Semantic search (optional, per index):** finds passages by meaning ("ending a contract" also finds "cancellation") with a local embedding model; see [Semantic search](#semantic-search-optional).
 - **Installable** with `pip install git+https://github.com/Kahrmii/docsearch.git`.
 - **Configurable** OCR languages and text analyzer; compatible with indices created by earlier versions.
 
@@ -258,6 +259,21 @@ An **mbox** file is a mailbox stored as one big text file with all messages one 
 - Mailboxes contain a lot of personal data: use a **separate index** for them (and mind the [cloud mode](#cloud-mode) rules).
 - Not supported directly: Outlook `.pst`/`.ost` (convert them to mbox first, e.g. with `readpst -r`) and Apple Mail `.emlx`. Single `.eml` files are read through Tika as before.
 
+## Semantic search (optional)
+
+The normal search finds the words you type. The **semantic search** finds passages about a topic even if the words differ. It is optional and per index, and everything stays on your computer.
+
+1. In LM Studio, download and **load an embedding model** (default `text-embedding-nomic-embed-text-v1.5`; another one: `EMBED_MODEL` in `.env` or the Settings tab). It runs next to the chat model; mind your video memory (the nomic model is small), and note that LM Studio may unload the chat model when it is set to keep only one model loaded.
+2. Create the vectors: tab **Index** → index name → **Create embeddings for this index** (window and web page), or `python index.py --index documents --embed`. Every document is cut into chunks of about 1,500 characters (the first 24 chunks per document, `EMBED_CHUNK_CHARS` / `EMBED_MAX_CHUNKS`), and each chunk gets a vector, stored in the document itself. The job can be stopped and continues where it stopped; only documents without vectors are processed. `--retry-failed` retries documents that failed, `--limit N` creates vectors for N documents only (a good first test).
+3. Ask as usual. For an index with vectors the agent gets the extra tool `semantic_search` (and uses it together with the exact-word tools). Without vectors the tool does not exist.
+
+Facts to know:
+- **Size and time:** a 768-dimensional vector per chunk takes about 3 KB in the index; 50,000 documents of 14 KB each (about 10 chunks) add roughly 2 GB, and creating them takes hours on a GPU that also runs the chat model. Try `--limit 500` first.
+- **Same model for creating and asking.** The vector size is fixed when the first vectors are stored; another model is refused (or: delete the index and start again). Vectors of different models cannot be compared.
+- The semantic search **always returns the nearest passages**, even when nothing really fits; the agent is told to judge the similarity and the excerpts. It is good for topics and paraphrases, weak for exact names, numbers and codes: use the normal search for those.
+- Documents indexed later (new files) have no vectors until you run **Create embeddings** again.
+- The questions are embedded locally as well; nothing is sent to the cloud for this. (In cloud mode the found excerpts go to the model like any other search result.)
+
 ## Index: fields and queries
 
 On the first run the index is created with 1 shard, 0 replicas and `refresh_interval: 30s`.
@@ -292,6 +308,7 @@ Order: environment variable before `.env` before default. All address variables 
 | `LLM_BASE_URL`, `LLM_MODEL` | local LLM server and model name | `http://127.0.0.1:1234`, `qwen/qwen3-14b` |
 | `LLM_THINK` | `1` enables the thinking mode of Qwen3 (more accurate, much slower) | `0` |
 | `INDEX_WORKERS`, `INDEX_BATCH_SIZE`, `MAX_FILE_MB` | parallel Tika requests, files per batch, size above which files are skipped (0 = no limit) | `4`, `50`, `100` |
+| `EMBED_MODEL`, `EMBED_CHUNK_CHARS`, `EMBED_MAX_CHUNKS` | embedding model in LM Studio, characters per chunk, chunks per document (see [Semantic search](#semantic-search-optional)) | `text-embedding-nomic-embed-text-v1.5`, `1500`, `24` |
 | `SAVE_CONVERSATIONS` | `0` keeps no conversations on disk | `1` |
 | `DOCSEARCH_HOME` | folder for `.env`, logs, settings and conversations of a pip-installed copy | `~/.docsearch` |
 | `LLM_PROVIDER` | default provider for `ask.py`: `local` or `anthropic` | `local` |
@@ -388,6 +405,8 @@ docsearch/
 │   ├── data/               packaged copies of docker-compose.yml and .env.example (a test keeps them identical)
 │   ├── config.py           .env + environment variables, local addresses only
 │   ├── preferences.py      the settings that can be edited in the window and the web page
+│   ├── embeddings.py       embedding client (LM Studio), chunking, vector mapping
+│   ├── embed_job.py        creates the vectors of an index (resumable)
 │   ├── health.py           status report (services, memory, disk, model context)
 │   ├── conversations.py    saved conversations and Markdown export
 │   ├── es.py               Elasticsearch client and index mapping

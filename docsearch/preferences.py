@@ -16,6 +16,9 @@ FIELDS = [
      "help": "Name of the model in LM Studio (as shown in its model list)."},
     {"key": "LLM_THINK", "label": "Thinking mode (Qwen3)", "kind": "bool",
      "help": "More accurate, but much slower."},
+    {"key": "EMBED_MODEL", "label": "Embedding model", "kind": "text",
+     "help": "Embedding model in LM Studio for the semantic search. Changing it makes existing vectors useless: "
+             "use the same model for creating and asking."},
     {"key": "ANTHROPIC_MODEL", "label": "Cloud model", "kind": "text", "help": "Claude model used in cloud mode."},
     {"key": "SAVE_CONVERSATIONS", "label": "Save conversations", "kind": "bool",
      "help": "Keeps questions and answers in the conversations folder on this computer (they can contain "
