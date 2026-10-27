@@ -17,6 +17,11 @@ Rules:
 - How often does X occur: count_term. Which email addresses/web addresses/domains/dates occur, or which most \
 often: find_patterns. Distribution by file type, author or year: group_by. What does it say about X, what did A \
 write to B: search_documents with phrases=[A, B]; to read further use get_document.
+- Mails (imported mailboxes) are documents with the file type "mail"; their text starts with Subject, From, To \
+and Date. For mails FROM or SENT BY a person use the `sender` filter (part of the address, e.g. "anna"); for mails \
+TO a person use `recipient`. Do not use `phrases` for that: it finds the name anywhere in the text, also in mails \
+that are only addressed to or mention the person. Narrow down further with `subject`, `date_from` and `date_to`, and \
+use group_by with mail_from, mail_to or mail_month for statistics. Attachments are not indexed.
 - A filename (e.g. "000304_report.txt") is not part of the text: use find_files for it, not search_documents. \
 If a file is not found there it is not in the index; say so and give possible reasons (too large, error while \
 reading, different index); do not claim it does not exist.

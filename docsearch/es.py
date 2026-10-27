@@ -17,6 +17,20 @@ def valid_index_name(name):
     return bool(INDEX_NAME.fullmatch(name))
 
 
+# Fields of mails (mbox import). Added to every new index and, when a mailbox is indexed, to existing indices.
+MAIL_PROPERTIES = {
+    "mail_from": {"type": "keyword"},
+    "mail_to": {"type": "keyword"},
+    "mail_cc": {"type": "keyword"},
+    "mail_subject": {"type": "keyword", "ignore_above": 1024},
+    "mail_date": {"type": "date"},
+    "mail_message_id": {"type": "keyword"},
+    "mail_attachments": {"type": "integer"},
+    "mail_attachment_names": {"type": "keyword"},
+    "mail_folder": {"type": "keyword"},
+}
+
+
 def mapping():
     return {
         "settings": {"number_of_shards": 1, "number_of_replicas": 0, "refresh_interval": "30s"},
@@ -38,6 +52,7 @@ def mapping():
                 "indexed_at": {"type": "date"},
                 # all Tika metadata, kept in _source only (not indexed)
                 "metadata": {"type": "object", "enabled": False},
+                **MAIL_PROPERTIES,
             }
         },
     }
@@ -83,6 +98,10 @@ class Es:
                 raise
         self.call("PUT", f"/{index}", mapping())
         return True
+
+    def ensure_mail_fields(self, index):
+        """Add the mail_* fields to an existing index (additive and harmless if they are already there)."""
+        self.call("PUT", f"/{index}/_mapping", {"properties": MAIL_PROPERTIES})
 
     def indices(self):
         """[(index name, document count)] without system indices."""

@@ -13,7 +13,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
 
-from . import config, services
+from . import config, mbox, services
 from .es import Es
 
 log = logging.getLogger("docsearch.indexing")
@@ -141,6 +141,79 @@ def _format_eta(seconds):
     return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
 
 
+def _progress(stats, on_progress, done, n_total, processed, start):
+    """Tell the callback how far we are. Returns (rate, eta in seconds or None)."""
+    rate = processed / max(time.time() - start, 1e-9)
+    eta = (n_total - done) / rate if rate else None
+    on_progress({"done": done, "total": n_total, "ok": stats["ok"], "errors": stats["errors"],
+                 "skipped": stats["skipped"], "rate": rate, "eta_s": eta})
+    return rate, eta
+
+
+def _log_progress(stats, done, n_total, rate, eta):
+    log.info("File %d/%d (%.1f%%) | ok %d | errors %d | skipped %d | %.2f files/s | ETA %s",
+             done, n_total, 100 * done / max(n_total, 1), stats["ok"], stats["errors"], stats["skipped"],
+             rate, _format_eta(eta) if eta is not None else "?")
+
+
+def _bulk(es, index, docs, stats):
+    """Write documents; rejected ones are counted and logged as errors."""
+    try:
+        rejected = es.bulk(index, docs)
+    except Exception as ex:
+        rejected = {d[0]: f"Bulk request failed: {ex}" for d in docs}
+    for rid, message in rejected.items():
+        stats["errors"] += 1
+        _log_error(rid, message)
+    stats["ok"] += len(docs) - len(rejected)
+
+
+def _mail_batch(es, index, opts, path, prefix, rel, mtime, batch, failed, stats, ctx):
+    """Index one batch of (number, raw message) of a mailbox. Returns False when the run has to end."""
+    if ctx["should_stop"]():
+        stats["stopped"] = True
+        log.warning("Abort requested.")
+        return False
+    ids = {number: f"{prefix}/{rel}#{number}" for number, _ in batch}
+    present = es.existing_ids(index, list(ids.values()))  # resume: skip messages that are already indexed
+    stats["skipped"] += len(present)
+    ctx["seen"] += len(batch)
+    todo = [(number, raw) for number, raw in batch if ids[number] not in present and ids[number] not in failed]
+    if opts.limit is not None:
+        todo = todo[:opts.limit - ctx["processed"]]
+    docs = []
+    for number, raw in todo:
+        try:
+            docs.append((ids[number], mbox.build_mail_doc(raw, number, path, mtime, opts.max_chars)))
+        except Exception as ex:  # one broken message must not end the run
+            stats["errors"] += 1
+            _log_error(ids[number], f"Cannot read message: {ex}")
+    if docs:
+        _bulk(es, index, docs, stats)
+    ctx["processed"] += len(todo)
+    done = ctx["processed"] if opts.limit is not None else ctx["base"] + ctx["seen"]
+    rate, eta = _progress(stats, ctx["on_progress"], done, ctx["n_total"], ctx["processed"], ctx["start"])
+    if todo or stats["skipped"] % 5000 < len(batch):
+        _log_progress(stats, done, ctx["n_total"], rate, eta)
+    return opts.limit is None or ctx["processed"] < opts.limit
+
+
+def _index_mailboxes(es, index, opts, data_dir, prefix, mailboxes, failed, stats, ctx):
+    """Index the messages of all mailboxes, batch by batch (message ID = <folder>/<mailbox>#<number>)."""
+    es.ensure_mail_fields(index)
+    for rel, _, mtime in mailboxes:
+        path = os.path.join(data_dir, rel)
+        batch = []
+        for number, raw in mbox.iter_messages(path):
+            batch.append((number, raw))
+            if len(batch) >= opts.batch_size:
+                if not _mail_batch(es, index, opts, path, prefix, rel, mtime, batch, failed, stats, ctx):
+                    return
+                batch = []
+        if batch and not _mail_batch(es, index, opts, path, prefix, rel, mtime, batch, failed, stats, ctx):
+            return
+
+
 def run_job(opts, on_progress=None, should_stop=None, on_status=None):
     """`run()` for the user interfaces: starts the Docker services first if they are not running.
 
@@ -176,6 +249,9 @@ def run(opts, on_progress=None, should_stop=None):
     if opts.dry_run:
         for ext, n in Counter(os.path.splitext(r)[1].lower() or "(none)" for r, _, _ in entries).most_common(12):
             log.info("  %-10s %d", ext, n)
+        for rel, _, _ in entries:
+            if mbox.looks_like_mbox(os.path.join(data_dir, rel)):
+                log.info("  mailbox %s: %d messages", rel, mbox.count_messages(os.path.join(data_dir, rel)))
         return stats
 
     version = services.tika_version()
@@ -191,6 +267,14 @@ def run(opts, on_progress=None, should_stop=None):
 
     failed = _failed_ids() if opts.skip_failed else set()
     candidates = [e for e in entries if doc_id(e[0]) not in failed]
+    # Mailboxes are read message by message (no size limit, no Tika); everything else goes through Tika
+    mailboxes = [e for e in candidates if mbox.looks_like_mbox(os.path.join(data_dir, e[0]))]
+    candidates = [e for e in candidates if e not in mailboxes]
+    mail_total = 0
+    for rel, _, _ in mailboxes:
+        count = mbox.count_messages(os.path.join(data_dir, rel))
+        log.info("Mailbox %s: %d messages", rel, count)
+        mail_total += count
     if opts.max_file_mb:
         limit_bytes = opts.max_file_mb * 1024 * 1024
         too_big = [e for e in candidates if e[1] > limit_bytes]
@@ -203,7 +287,7 @@ def run(opts, on_progress=None, should_stop=None):
             candidates = [e for e in candidates if e[1] <= limit_bytes]
     if opts.random:
         random.Random(opts.seed).shuffle(candidates)
-    n_total = opts.limit if opts.limit is not None else len(candidates)
+    n_total = opts.limit if opts.limit is not None else len(candidates) + mail_total
 
     start = time.time()
     processed = pos = 0
@@ -234,27 +318,18 @@ def run(opts, on_progress=None, should_stop=None):
                         stats["errors"] += 1
                         _log_error(doc_id(rel), str(ex))
             if docs:
-                try:
-                    rejected = es.bulk(index, docs)
-                except Exception as ex:
-                    rejected = {d[0]: f"Bulk request failed: {ex}" for d in docs}
-                for rid, message in rejected.items():
-                    stats["errors"] += 1
-                    _log_error(rid, message)
-                stats["ok"] += len(docs) - len(rejected)
+                _bulk(es, index, docs, stats)
             processed += len(batch)
 
         done = processed if opts.limit is not None else pos
-        elapsed = max(time.time() - start, 1e-9)
-        rate = processed / elapsed
-        remaining = (n_total - done) if opts.limit is not None else (len(candidates) - pos)
-        eta = remaining / rate if rate else None
-        on_progress({"done": done, "total": n_total, "ok": stats["ok"], "errors": stats["errors"],
-                     "skipped": stats["skipped"], "rate": rate, "eta_s": eta})
+        rate, eta = _progress(stats, on_progress, done, n_total, processed, start)
         if batch or stats["skipped"] % 5000 < len(chunk):
-            log.info("File %d/%d (%.1f%%) | ok %d | errors %d | skipped %d | %.2f files/s | ETA %s",
-                     done, n_total, 100 * done / max(n_total, 1), stats["ok"], stats["errors"], stats["skipped"],
-                     rate, _format_eta(eta) if eta is not None else "?")
+            _log_progress(stats, done, n_total, rate, eta)
+
+    if mailboxes and not stats["stopped"] and (opts.limit is None or processed < opts.limit):
+        ctx = {"seen": 0, "processed": processed, "base": pos, "n_total": n_total, "start": start,
+               "on_progress": on_progress, "should_stop": should_stop}
+        _index_mailboxes(es, index, opts, data_dir, prefix, mailboxes, failed, stats, ctx)
 
     es.call("POST", f"/{index}/_refresh")
     stats["seconds"] = time.time() - start

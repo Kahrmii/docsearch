@@ -84,6 +84,10 @@ class PromptTest(unittest.TestCase):
     def test_answer_language_follows_the_question(self):
         self.assertIn("language of the user's question", agent.SYSTEM)
 
+    def test_mails_from_a_person_use_the_sender_filter_not_a_text_search(self):
+        self.assertIn("`sender` filter", agent.SYSTEM)
+        self.assertIn("Do not use `phrases`", agent.SYSTEM)
+
 
 class FakeClient:
     """Returns prepared replies in order (the last one repeats). A reply is a text or a ready message dict."""

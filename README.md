@@ -40,6 +40,7 @@ Indexing, searching and counting always run locally; there is no telemetry. Pyth
 - **Resumable indexing** with progress, errors that do not stop the run, and a file size limit.
 - **Local or cloud model**, switchable in the window; cloud only for indices you approved.
 - **Exact numbers:** counting and ranking are done by Elasticsearch or plain code.
+- **Mailboxes (mbox):** every mail becomes a document with sender, recipients, date and subject; the agent filters and counts by them.
 - **Configurable** OCR languages and text analyzer; compatible with indices created by earlier versions.
 
 ## Cloud mode
@@ -212,6 +213,7 @@ Good to know:
 - "How often does *Jane Doe* occur?" → `count_term`
 - "Which email address is mentioned most often?" → `find_patterns`
 - "Which domains occur most often in Excel files?" → `find_patterns` with a file type
+- "Who wrote the most mails?" / "How many mails did Anna send in May 2021?" → `group_by` / `count_documents` with mail filters (see [Mailboxes](#mailboxes-mbox))
 - "What did *Anna Example* write to *Bernd Sample*?" → `search_documents` with both names
 - "Which documents mention *budget consolidation*, and what do they say?" → `search_documents`, possibly `get_document`
 - "Is there a file called report_2023?" → `find_files`
@@ -228,6 +230,19 @@ Good to know:
 6. **Errors do not stop the run:** on "503" (Tika restarting after a crash) the indexer waits 15 s and 30 s and tries three times. What still fails is written to `logs/errors.jsonl` and the run log; such files are retried on the next start (unless `--skip-failed`).
 7. **Progress:** `File 1234/48725 (2.5%) | ok … | errors … | skipped … | 1.0 files/s | ETA …`, also in `logs/index_<time>.log` or `logs/app_<time>.log`.
 
+### Mailboxes (mbox)
+
+An **mbox** file is a mailbox stored as one big text file with all messages one after the other (Google Takeout exports, Thunderbird folders, mail server backups). Put it into a folder you index like any other file; nothing else to configure.
+
+- **Detected** by the extension `.mbox`/`.mbx`, or – for files without extension such as Thunderbird's `Inbox` – by a first line that looks like a mailbox separator (`From user@host Mon Jan 01 00:00:00 2018`).
+- **One document per mail** (file type `mail`, name `<mailbox>#<number>`, e.g. `Inbox.mbox#1234`). The text starts with Subject, From, To, Cc and Date, followed by the body, so ordinary searches find names, addresses and subjects. HTML-only mails are converted to text; if a mail has both, the plain text part is used. Encoded headers (e.g. umlauts in subjects) are decoded.
+- **Extra fields** for filters and statistics: `mail_from`, `mail_to`, `mail_cc`, `mail_subject`, `mail_date` (UTC), `mail_message_id`, `mail_folder`, `mail_attachments` and `mail_attachment_names`. The mail date is also stored as `mtime`, so statistics per year work for mails. Existing indices get the new fields automatically when a mailbox is indexed into them; nothing has to be re-indexed.
+- **Attachments are not indexed** (only their number and names are recorded). That was a deliberate choice for mailboxes without attachments; the mails stay searchable either way.
+- **Large mailboxes** are read message by message and only read (never opened for writing), so many gigabytes are fine. The `--max-file-mb` limit does not apply to mailboxes. Resuming works as for files: messages that are already in the index are skipped.
+- **Questions to ask** (the agent filters by `sender`, `recipient`, `subject`, `date_from` and `date_to`, and groups by `mail_from`, `mail_to`, `mail_folder` or `mail_month`): "Who wrote the most mails?", "How many mails did Anna send in May 2021?", "What did Anna write to Bernd about the contract?", "Mails per month".
+- Mailboxes contain a lot of personal data: use a **separate index** for them (and mind the [cloud mode](#cloud-mode) rules).
+- Not supported directly: Outlook `.pst`/`.ost` (convert them to mbox first, e.g. with `readpst -r`) and Apple Mail `.emlx`. Single `.eml` files are read through Tika as before.
+
 ## Index: fields and queries
 
 On the first run the index is created with 1 shard, 0 replicas and `refresh_interval: 30s`.
@@ -241,6 +256,7 @@ On the first run the index is created with 1 shard, 0 replicas and `refresh_inte
 | `content_type`, `author`, `created`, `page_count`, `language` | keyword/integer | selected Tika metadata |
 | `indexed_at` | date | time of indexing |
 | `metadata` | object (not indexed) | all Tika metadata, stored in `_source` only |
+| `mail_from`, `mail_to`, `mail_cc`, `mail_subject`, `mail_date`, `mail_message_id`, `mail_folder`, `mail_attachments`, `mail_attachment_names` | keyword/date/integer | only for mails from an mbox file, see [Mailboxes (mbox)](#mailboxes-mbox) |
 
 The **text** is in the index, **the original files are not** – the field `path` leads you to the file for every hit.
 
@@ -255,10 +271,10 @@ Order: environment variable before `.env` before default. All address variables 
 | Variable | Meaning | Default |
 |---|---|---|
 | `ELASTIC_PASSWORD` | password of the user `elastic` (required) | – |
-| `ES_URL`, `TIKA_URL` | addresses of the services | `http://localhost:9200`, `http://localhost:9998` |
+| `ES_URL`, `TIKA_URL` | addresses of the services (use `127.0.0.1`, not `localhost`: on Windows `localhost` first tries IPv6 and makes every request about 2 seconds slower) | `http://127.0.0.1:9200`, `http://127.0.0.1:9998` |
 | `OCR_LANGUAGES` | Tesseract languages for scans, joined with `+`, e.g. `deu+eng` | `eng` |
 | `TEXT_ANALYZER` | Elasticsearch analyzer for the text of **new** indices (e.g. `standard`, `english`, `german`) | `standard` |
-| `LLM_BASE_URL`, `LLM_MODEL` | local LLM server and model name | `http://localhost:1234`, `qwen/qwen3-14b` |
+| `LLM_BASE_URL`, `LLM_MODEL` | local LLM server and model name | `http://127.0.0.1:1234`, `qwen/qwen3-14b` |
 | `LLM_THINK` | `1` enables the thinking mode of Qwen3 (more accurate, much slower) | `0` |
 | `LLM_PROVIDER` | default provider for `ask.py`: `local` or `anthropic` | `local` |
 | `ANTHROPIC_API_KEY` | API key for cloud mode (only in `.env`, never in the repository) | – |
@@ -353,6 +369,7 @@ docsearch/
 │   ├── llm.py              LLM clients: local (OpenAI-compatible) and cloud (Anthropic)
 │   ├── cloud_policy.py     per-index approval for the cloud (cloud_indices.json)
 │   ├── index_admin.py      deleting an index: validation, warning text, clean-up
+│   ├── mbox.py             reading mbox mailboxes: split into messages, mail fields and text
 │   ├── secrets_check.py    counts documents that look like keys/credentials (cloud safeguard)
 │   ├── services.py         check and start the Docker services (first-run setup)
 │   ├── indexing.py         pipeline file -> Tika -> Elasticsearch
@@ -375,7 +392,7 @@ python -m unittest discover -s tests -t .
 ## Limitations
 
 - **Keyword search, not semantic search:** "termination" does not automatically find "ending of the contract". An extension with embeddings is possible but enlarges the index and the compute time a lot.
-- **Attachments and archives:** embedded files (email attachments, ZIP contents) are not stored as documents of their own; only the text of the main file goes into the index.
+- **Attachments and archives:** embedded files (email attachments, ZIP contents) are not stored as documents of their own; only the text of the main file goes into the index. For mails from an mbox file the attachments are skipped as well (their names are recorded).
 - **Quality of the source:** scans without good OCR hits, handwriting, tables inside images, protected or damaged files yield little or no text.
 - **Statements about very many documents:** "Summarise everything about X" works only approximately; the agent evaluates the best hits, not every document.
 - **One Elasticsearch node** without replicas: fine for local use, no failover.

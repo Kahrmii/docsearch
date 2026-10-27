@@ -11,8 +11,11 @@ PATTERNS = {
     "date": re.compile(r"\b\d{1,2}\.\d{1,2}\.(?:19|20)\d{2}\b"),
 }
 PATTERN_KINDS = ["email", "url", "domain", "date"]  # "domain" = the part after the @ of email addresses
-GROUP_FIELDS = ["extension", "author", "content_type", "language", "mtime_year"]
-SOURCE_FIELDS = ["filename", "path", "content", "author", "created", "extension", "page_count"]
+GROUP_FIELDS = ["extension", "author", "content_type", "language", "mtime_year",
+                "mail_from", "mail_to", "mail_folder", "mail_month"]
+SOURCE_FIELDS = ["filename", "path", "content", "author", "created", "extension", "page_count",
+                 "mail_from", "mail_to", "mail_subject", "mail_date"]
+DATE = re.compile(r"\d{4}(?:-\d{2}(?:-\d{2})?)?")  # 2021, 2021-05, 2021-05-31
 
 
 class Cancelled(Exception):
@@ -44,13 +47,39 @@ def words(text):
     return re.findall(r"\w{3,}", text or "")
 
 
-def build_query(query=None, phrases=None, extension=None):
+def _contains(field, value):
+    """Case-insensitive 'contains' on a keyword field; the characters * ? and \\ in the value are taken literally."""
+    escaped = re.sub(r"([\\*?])", r"\\\1", value.strip().lower())
+    return {"wildcard": {field: {"value": f"*{escaped}*", "case_insensitive": True}}}
+
+
+def _date_bound(value):
+    """A date as YYYY, YYYY-MM or YYYY-MM-DD covers the whole year/month/day (rounded by Elasticsearch)."""
+    value = value.strip()
+    if DATE.fullmatch(value):
+        return value + {4: "||/y", 7: "||/M", 10: "||/d"}[len(value)]
+    return value
+
+
+def build_query(query=None, phrases=None, extension=None, sender=None, recipient=None, subject=None,
+                date_from=None, date_to=None):
     must, flt = [], []
     if query:
         must.append({"match": {"content": {"query": query, "operator": "and"}}})
     must += [{"match_phrase": {"content": p}} for p in phrases or [] if p]
     if extension:
         flt.append({"term": {"extension": extension.lower().lstrip(".")}})
+    # mails (mbox import)
+    if sender:
+        flt.append(_contains("mail_from", sender))
+    if recipient:
+        flt.append({"bool": {"should": [_contains("mail_to", recipient), _contains("mail_cc", recipient)],
+                             "minimum_should_match": 1}})
+    if subject:
+        flt.append(_contains("mail_subject", subject))
+    if date_from or date_to:
+        bounds = {"gte": _date_bound(date_from) if date_from else None, "lte": _date_bound(date_to) if date_to else None}
+        flt.append({"range": {"mail_date": {k: v for k, v in bounds.items() if v}}})
     if not must and not flt:
         return {"match_all": {}}
     return {"bool": {"must": must, "filter": flt}}
@@ -95,11 +124,12 @@ def _check_stop(ctx):
 
 # ---- Tools -------------------------------------------------------------------------------------
 
-def search_documents(ctx, query=None, phrases=None, extension=None, size=8):
+def search_documents(ctx, query=None, phrases=None, extension=None, size=8, sender=None, recipient=None,
+                     subject=None, date_from=None, date_to=None):
     size = _clamp(size, 1, 20, 8)
     result = ctx.es.search(ctx.index, {
         "size": size, "track_total_hits": True, "_source": SOURCE_FIELDS,
-        "query": build_query(query, phrases, extension)})
+        "query": build_query(query, phrases, extension, sender, recipient, subject, date_from, date_to)})
     per_doc = 3 if size <= 8 else 2
     width = _clamp(ctx.max_result_chars // (size * per_doc) - 60, 200, 700, 400)
     terms = list(phrases or []) + words(query)
@@ -107,13 +137,19 @@ def search_documents(ctx, query=None, phrases=None, extension=None, size=8):
     for h in result["hits"]["hits"]:
         src = h["_source"]
         ctx.sources[src["filename"]] = src.get("path")
-        hits.append({"doc": src["filename"], "author": src.get("author"), "created": src.get("created"),
-                     "excerpts": windows(src.get("content") or "", terms, width, per_doc)})
+        hit = {"doc": src["filename"], "author": src.get("author"), "created": src.get("created")}
+        for key, field in (("subject", "mail_subject"), ("from", "mail_from"), ("to", "mail_to"), ("date", "mail_date")):
+            if src.get(field):  # only mails have these
+                hit[key] = src[field][:5] if isinstance(src[field], list) else src[field]
+        hit["excerpts"] = windows(src.get("content") or "", terms, width, per_doc)
+        hits.append(hit)
     return {"hits_total": result["hits"]["total"]["value"], "hits": hits}
 
 
-def count_documents(ctx, query=None, phrases=None, extension=None):
-    return {"documents": ctx.es.count(ctx.index, build_query(query, phrases, extension))}
+def count_documents(ctx, query=None, phrases=None, extension=None, sender=None, recipient=None, subject=None,
+                    date_from=None, date_to=None):
+    query_body = build_query(query, phrases, extension, sender, recipient, subject, date_from, date_to)
+    return {"documents": ctx.es.count(ctx.index, query_body)}
 
 
 def count_term(ctx, phrase, extension=None, scan_limit=20000):
@@ -169,16 +205,23 @@ def find_patterns(ctx, kind, phrases=None, extension=None, top=20, scan_limit=10
             "note": "plain text pattern matching; OCR errors can distort spellings"}
 
 
-def group_by(ctx, field, query=None, phrases=None, extension=None, size=10):
+HISTOGRAMS = {"mtime_year": ("mtime", "year", "yyyy"), "mail_month": ("mail_date", "month", "yyyy-MM")}
+
+
+def group_by(ctx, field, query=None, phrases=None, extension=None, size=10, sender=None, recipient=None,
+             subject=None, date_from=None, date_to=None):
     if field not in GROUP_FIELDS:
         return {"error": f"field must be one of {GROUP_FIELDS}"}
     size = _clamp(size, 1, 50, 10)
-    agg = ({"date_histogram": {"field": "mtime", "calendar_interval": "year", "format": "yyyy"}}
-           if field == "mtime_year" else {"terms": {"field": field, "size": size}})
-    result = ctx.es.search(ctx.index, {"size": 0, "track_total_hits": True,
-                                       "query": build_query(query, phrases, extension), "aggs": {"g": agg}})
+    if field in HISTOGRAMS:
+        date_field, interval, pattern = HISTOGRAMS[field]
+        agg = {"date_histogram": {"field": date_field, "calendar_interval": interval, "format": pattern}}
+    else:
+        agg = {"terms": {"field": field, "size": size}}
+    query_body = build_query(query, phrases, extension, sender, recipient, subject, date_from, date_to)
+    result = ctx.es.search(ctx.index, {"size": 0, "track_total_hits": True, "query": query_body, "aggs": {"g": agg}})
     buckets = result["aggregations"]["g"]["buckets"]
-    if field == "mtime_year":
+    if field in HISTOGRAMS:
         buckets = [b for b in buckets if b["doc_count"]]
     return {"field": field, "documents_total": result["hits"]["total"]["value"],
             "groups": [{"value": b.get("key_as_string", b["key"]), "documents": b["doc_count"]} for b in buckets]}
@@ -244,15 +287,25 @@ _PHRASES = {"type": "array", "items": _STR,
             "description": "Exact phrases (names, terms) that must ALL occur in the document"}
 _EXT = {"type": "string", "description": "Only this file type, e.g. pdf, docx, xlsx"}
 _QUERY = {"type": "string", "description": "Free search words (all must occur)"}
+_MAIL_FILTERS = {  # only mails (imported mailboxes) have these fields
+    "sender": {"type": "string", "description": "Mails only: part of the sender's address, case-insensitive. Use "
+                                                 "this, not phrases, for 'mails from/sent by X'"},
+    "recipient": {"type": "string", "description": "Mails only: part of a recipient's address (To or Cc). Use this "
+                                                   "for 'mails to X'"},
+    "subject": {"type": "string", "description": "Mails only: part of the subject, case-insensitive"},
+    "date_from": {"type": "string", "description": "Mails only: from this date, as YYYY, YYYY-MM or YYYY-MM-DD"},
+    "date_to": {"type": "string", "description": "Mails only: up to and including this date, same format"},
+}
 
 TOOLS = [
     _fn("search_documents", "Full-text search. Returns the hit count and text excerpts (with several phrases, the "
         "places where they stand close together). Use it to answer 'What does it say about X' or "
         "'What did A write to B'.",
         {"query": _QUERY, "phrases": _PHRASES, "extension": _EXT,
-         "size": {"type": "integer", "description": "Number of documents, 1-20, default 8"}}),
-    _fn("count_documents", "Counts the documents matching search words, phrases and file type.",
-        {"query": _QUERY, "phrases": _PHRASES, "extension": _EXT}),
+         "size": {"type": "integer", "description": "Number of documents, 1-20, default 8"}, **_MAIL_FILTERS}),
+    _fn("count_documents", "Counts the documents matching search words, phrases, file type and (for mails) "
+        "sender, recipient, subject and date range.",
+        {"query": _QUERY, "phrases": _PHRASES, "extension": _EXT, **_MAIL_FILTERS}),
     _fn("count_term", "How often does a name or term occur? Returns the document count, literal occurrences and the "
         "documents with the most occurrences.", {"phrase": _STR, "extension": _EXT}, ["phrase"]),
     _fn("find_patterns", "Counts patterns across all documents: email addresses (email), web addresses (url), "
@@ -261,9 +314,12 @@ TOOLS = [
         {"kind": {"type": "string", "enum": PATTERN_KINDS}, "phrases": _PHRASES, "extension": _EXT,
          "top": {"type": "integer", "description": "Number of entries in the ranking, default 20"}}, ["kind"]),
     _fn("group_by", "Distribution of the documents by file type (extension), author (author), content type "
-        "(content_type), language (language) or modification year (mtime_year).",
+        "(content_type), language (language) or modification year (mtime_year). For mails: by sender (mail_from), "
+        "recipient (mail_to), mailbox (mail_folder) or month (mail_month), e.g. 'who wrote the most mails' or "
+        "'mails per month'.",
         {"field": {"type": "string", "enum": GROUP_FIELDS}, "query": _QUERY, "phrases": _PHRASES,
-         "extension": _EXT, "size": {"type": "integer", "description": "Number of groups, default 10"}}, ["field"]),
+         "extension": _EXT, "size": {"type": "integer", "description": "Number of groups, default 10"},
+         **_MAIL_FILTERS}, ["field"]),
     _fn("find_files", "Finds documents by FILENAME (also just a part of it, case-insensitive), not by content. "
         "Shows size and text length; reports when no file with this name is in the index.",
         {"name": {"type": "string", "description": "Part of the filename, e.g. 'report' or '000304_k1'"},
