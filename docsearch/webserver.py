@@ -396,8 +396,26 @@ def api_conversation_export(state, query, body):
     return 200, {"filename": (name or "conversation") + ".md", "markdown": conversations.to_markdown(conv)}
 
 
+def index_overview(es):
+    """One row per index: documents, size, how many have vectors, cloud approval. Never raises."""
+    rows = []
+    try:
+        names = [name for name, _ in es.indices()]
+    except (EsError, SystemExit, OSError):
+        return rows
+    for name in names:
+        row = {"name": name, "cloud_allowed": cloud_policy.is_allowed(name)}
+        try:
+            row.update(es.index_info(name) or {})
+            row["with_vectors"] = es.embedding_stats(name)["embedded"]
+        except (EsError, SystemExit, OSError, KeyError):
+            pass
+        rows.append(row)
+    return rows
+
+
 def api_health(state, query, body):
-    return 200, {"version": __version__, "checks": health.run_checks()}
+    return 200, {"version": __version__, "checks": health.run_checks(), "indices": index_overview(state.es())}
 
 
 def api_settings(state, query, body):

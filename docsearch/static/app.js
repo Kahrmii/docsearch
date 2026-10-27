@@ -57,6 +57,7 @@
     $("status-refresh").disabled = false;
     if (!ok) { $("status-note").textContent = (data && data.error) || "Could not check."; return; }
     $("status-note").textContent = "docsearch " + data.version;
+    fillIndexTable(data.indices || []);
     $("status-list").replaceChildren(...data.checks.map((c) => {
       const item = document.createElement("li");
       item.className = c.status;
@@ -69,6 +70,24 @@
     }));
   }
   $("status-refresh").addEventListener("click", loadStatus);
+  function fillIndexTable(rows) {
+    const head = document.createElement("tr");
+    for (const title of ["Index", "Documents", "Size (MB)", "With vectors", "Cloud"]) {
+      const th = document.createElement("th");
+      th.textContent = title;
+      head.append(th);
+    }
+    const body = rows.map((r) => {
+      const tr = document.createElement("tr");
+      for (const value of [r.name, r.documents, r.size_mb, r.with_vectors, r.cloud_allowed ? "allowed" : "blocked"]) {
+        const td = document.createElement("td");
+        td.textContent = value === undefined ? "?" : String(value);
+        tr.append(td);
+      }
+      return tr;
+    });
+    $("status-indices").replaceChildren(head, ...body);
+  }
 
   // ---- settings
   let settingFields = [];

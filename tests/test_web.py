@@ -25,6 +25,9 @@ class FakeEs:
     def delete_index(self, index):
         self.deleted.append(index)
 
+    def embedding_stats(self, index):
+        return {"embedded": 3 if index == "documents" else 0, "missing": 0, "dims": 3}
+
 
 class WebTestCase(unittest.TestCase):
     def setUp(self):
@@ -357,6 +360,9 @@ class StatusAndSettingsTest(WebTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data["checks"], checks)
         self.assertTrue(data["version"])
+        rows = {r["name"]: r for r in data["indices"]}
+        self.assertEqual((rows["documents"]["documents"], rows["documents"]["with_vectors"]), (5, 3))
+        self.assertEqual(rows["keys"]["cloud_allowed"], False)
 
     def test_settings_can_be_read_and_saved(self):
         status, data, _ = self.request("GET", "/api/settings")
