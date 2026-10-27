@@ -17,5 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: The package builds
+        run: python -m pip wheel . --no-deps -w dist -q
       - name: Unit tests (no Elasticsearch, Tika or LLM needed)
         run: python -W error::ResourceWarning -m unittest discover -s tests -t .

@@ -2,15 +2,38 @@
 import logging
 import os
 import secrets
+import shutil
 import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-ROOT = Path(__file__).resolve().parent.parent
+PACKAGE_DIR = Path(__file__).resolve().parent
+PACKAGE_DATA = PACKAGE_DIR / "data"  # copies of docker-compose.yml and .env.example (see HOME_FILES)
+
+
+def _find_root():
+    """Where .env, logs, settings and saved conversations live: the repository folder when running from a
+    checkout, otherwise ~/.docsearch (installed with pip). DOCSEARCH_HOME overrides both."""
+    override = os.environ.get("DOCSEARCH_HOME")
+    if override:
+        root = Path(override).expanduser().resolve()
+    elif (PACKAGE_DIR.parent / "docker-compose.yml").exists():
+        return PACKAGE_DIR.parent
+    else:
+        root = Path.home() / ".docsearch"
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return root
+
+
+ROOT = _find_root()
 ENV_FILE = ROOT / ".env"
 ENV_EXAMPLE = ROOT / ".env.example"
 PASSWORD_PLACEHOLDER = "PUT_A_LONG_RANDOM_PASSWORD_HERE"
 LOG_DIR = ROOT / "logs"
+HOME_FILES = {"docker-compose.yml": "docker-compose.yml", ".env.example": "env.example"}  # target -> packaged copy
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 _file_cache = None
@@ -35,11 +58,19 @@ def get(name, default=None):
     return os.environ.get(name) or _env_file().get(name) or default
 
 
+def ensure_home():
+    """Make sure docker-compose.yml and .env.example exist in ROOT (installed with pip: copied from the package)."""
+    for target, packaged in HOME_FILES.items():
+        if not (ROOT / target).exists() and (PACKAGE_DATA / packaged).exists():
+            shutil.copyfile(PACKAGE_DATA / packaged, ROOT / target)
+
+
 def ensure_env():
     """First run: create .env from .env.example with a freshly generated random password.
 
     Returns True if the file was created. An existing .env is never touched."""
     global _file_cache
+    ensure_home()
     if ENV_FILE.exists():
         return False
     text = ENV_EXAMPLE.read_text(encoding="utf-8").replace(PASSWORD_PLACEHOLDER, secrets.token_hex(24))
@@ -127,7 +158,7 @@ def anthropic_key():
 
 def setup_logging(name, console=True):
     """Log to logs/<name>_<time>.log and optionally to the console. Use console=False under pythonw."""
-    LOG_DIR.mkdir(exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     handlers = [logging.FileHandler(LOG_DIR / f"{name}_{time.strftime('%Y%m%d_%H%M%S')}.log", encoding="utf-8")]
     if console:
         handlers.append(logging.StreamHandler())

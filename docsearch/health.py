@@ -158,5 +158,9 @@ def format_text(checks):
     return "\n".join(f"[{marks[c['status']]}] {c['name']}: {c['detail']}" for c in checks)
 
 
-if __name__ == "__main__":
+def main():
     print(format_text(run_checks()))
+
+
+if __name__ == "__main__":
+    main()

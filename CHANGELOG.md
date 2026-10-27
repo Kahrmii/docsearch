@@ -2,6 +2,14 @@
 
 All notable changes. The version is in `docsearch/__init__.py` (`python web.py --version`).
 
+## 0.7.0
+
+- Installable with pip: `pip install git+https://github.com/Kahrmii/docsearch.git` gives the commands `docsearch`
+  (window), `docsearch-web`, `docsearch-index`, `docsearch-ask` and `docsearch-health`. An installed copy keeps
+  `.env`, logs, settings and conversations in `~/.docsearch` (change with `DOCSEARCH_HOME`) and copies
+  `docker-compose.yml` there on the first start. The scripts in the repository (`app.py`, `web.py`, `index.py`,
+  `ask.py`, `start.bat`, `start.sh`) work as before.
+
 ## 0.6.0
 
 - Source preview: clicking a source in an answer shows the passages around the searched words (marked) in the

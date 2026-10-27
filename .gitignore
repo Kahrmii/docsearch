@@ -6,6 +6,9 @@
 # Runtime data and local approvals
 logs/
 conversations/
+build/
+dist/
+*.egg-info/
 gui_settings.json
 cloud_indices.json
 *.log

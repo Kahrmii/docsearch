@@ -41,6 +41,11 @@ Indexing, searching and counting always run locally; there is no telemetry. Pyth
 - **Local or cloud model**, switchable in the window; cloud only for indices you approved.
 - **Exact numbers:** counting and ranking are done by Elasticsearch or plain code.
 - **Mailboxes (mbox):** every mail becomes a document with sender, recipients, date and subject; the agent filters and counts by them.
+- **Checked answers:** a source quoted as `[file name]` that appears in no search result gets a warning.
+- **Source preview** (the matching passages, marked) and **saved conversations** with Markdown export.
+- **Status tab** (Docker memory, disk, loaded model and its context) and **Settings tab** (models, OCR language, workers) in the window and the web page.
+- **Duplicates** (same file content, same mail) are indexed only once.
+- **Installable** with `pip install git+https://github.com/Kahrmii/docsearch.git`.
 - **Configurable** OCR languages and text analyzer; compatible with indices created by earlier versions.
 
 ## Cloud mode
@@ -96,7 +101,7 @@ The indexer runs directly on the host and sends every file to Tika over HTTP. Th
 
 ## Quick start
 
-You need **Docker Desktop** (running) and **Python 3.9+**. Everything else is set up for you:
+You need **Docker Desktop** (running) and **Python 3.10+**. Everything else is set up for you:
 
 ```bash
 git clone https://github.com/Kahrmii/docsearch.git docsearch
@@ -112,6 +117,8 @@ On the **first start** the program automatically
 
 In the window: tab **Index** → choose a folder → **Start**. Then tab **Ask**.
 For the questions a model must be loaded in your local LLM server and its local server started – or cloud mode must be set up (the only parts that are not automatic: a language model is not part of the repository).
+
+**Install instead of cloning:** `pip install git+https://github.com/Kahrmii/docsearch.git` provides the commands `docsearch` (window), `docsearch-web`, `docsearch-index`, `docsearch-ask` and `docsearch-health`. An installed copy keeps `.env`, logs, settings and saved conversations in the folder `~/.docsearch` (set `DOCSEARCH_HOME` to use another one) and copies `docker-compose.yml` there on the first start. Everything below works the same; replace `python index.py` by `docsearch-index` and so on.
 
 Prefer the command line? `python index.py "D:\Archive" --recursive` and `python ask.py "…"` do the same first-time setup. If you want to start the containers yourself: `docker compose up -d` (create `.env` first with `python -c "from docsearch import config; config.ensure_env()"`).
 
@@ -151,6 +158,12 @@ Security of the web interface:
 - **Model:** "Local (LM Studio)" or "Claude (cloud)". Cloud works only if **"Allow cloud for this index"** is ticked; otherwise nothing is sent. Switching index or model automatically starts a new conversation. The status line names the model in use.
 - **Sources** in square brackets are **clickable**: a click opens the file (known document types) or shows it in the file explorer.
 - **Stop** cancels a running analysis.
+- **Source preview:** the web page opens a **preview** of the passages around the searched words (marked) with an "Open file" button; the window opens the same preview in a small window.
+- **Saved conversations:** every answer is stored in `conversations/` (ignored by git; it contains your questions and the answers, which may quote your documents). Web: "Saved conversations" with Open, Rename, Delete and **Export this conversation (.md)**; window: **History ...** and **Export ...**. The Markdown file lists questions, answers and the cited file names (no paths). The setting "Save conversations" switches the storing off.
+
+**Tab "Status"** shows whether Elasticsearch and Tika answer, how full their containers and the disk are, which model is loaded in LM Studio and how large its context is (a small context cuts answers short), and whether a cloud key is set (never shown). The same report: `python -m docsearch.health`.
+
+**Tab "Settings"** changes the model names, thinking mode, OCR languages, text analyzer, Tika workers, batch size, file size limit and whether conversations are saved. Values are written to `.env` and apply at once; passwords and API keys are deliberately not editable there.
 
 ## Command line
 
@@ -228,7 +241,9 @@ Good to know:
 4. **Extraction:** every file is streamed to Tika with `PUT /rmeta/text` (header `X-Tika-OCRLanguage` from `OCR_LANGUAGES`). Result: plain text and all metadata.
 5. **Deliberately low parallelism (4):** Tika with OCR is memory-hungry; too many parallel jobs make the container die. More workers only make sense if Tika gets more RAM.
 6. **Errors do not stop the run:** on "503" (Tika restarting after a crash) the indexer waits 15 s and 30 s and tries three times. What still fails is written to `logs/errors.jsonl` and the run log; such files are retried on the next start (unless `--skip-failed`).
-7. **Progress:** `File 1234/48725 (2.5%) | ok … | errors … | skipped … | 1.0 files/s | ETA …`, also in `logs/index_<time>.log` or `logs/app_<time>.log`.
+7. **Duplicates:** every file is hashed (SHA-256) before it is sent to Tika; a mail is identified by its Message-ID. Content that is already in the index (or was seen earlier in the run) is skipped and counted as "duplicates"; this catches Gmail exports that contain a mail in a label folder and again in "All Mail". `--keep-duplicates` indexes them anyway. Documents indexed before this feature have no hash, so only new content is compared against them.
+8. **OCR:** Tika OCRs only the pages of a PDF that have no text layer. Text PDFs are therefore already fast, and a switch for this is not possible in Tika 4.1. The number of OCR pages is stored in the field `ocr_pages`, and the end of a run logs for how many files OCR was needed.
+9. **Progress:** `File 1234/48725 (2.5%) | ok … | errors … | skipped … | 1.0 files/s | ETA …`, also in `logs/index_<time>.log` or `logs/app_<time>.log`.
 
 ### Mailboxes (mbox)
 
@@ -276,6 +291,9 @@ Order: environment variable before `.env` before default. All address variables 
 | `TEXT_ANALYZER` | Elasticsearch analyzer for the text of **new** indices (e.g. `standard`, `english`, `german`) | `standard` |
 | `LLM_BASE_URL`, `LLM_MODEL` | local LLM server and model name | `http://127.0.0.1:1234`, `qwen/qwen3-14b` |
 | `LLM_THINK` | `1` enables the thinking mode of Qwen3 (more accurate, much slower) | `0` |
+| `INDEX_WORKERS`, `INDEX_BATCH_SIZE`, `MAX_FILE_MB` | parallel Tika requests, files per batch, size above which files are skipped (0 = no limit) | `4`, `50`, `100` |
+| `SAVE_CONVERSATIONS` | `0` keeps no conversations on disk | `1` |
+| `DOCSEARCH_HOME` | folder for `.env`, logs, settings and conversations of a pip-installed copy | `~/.docsearch` |
 | `LLM_PROVIDER` | default provider for `ask.py`: `local` or `anthropic` | `local` |
 | `ANTHROPIC_API_KEY` | API key for cloud mode (only in `.env`, never in the repository) | – |
 | `ANTHROPIC_MODEL` | Claude model for cloud mode | `claude-sonnet-5-5` |
@@ -356,15 +374,22 @@ Safeguards: only plain index names are accepted (no wildcards, lists, `_all` or 
 
 ```
 docsearch/
-├── app.py                  main window (tabs Index / Ask)
+├── app.py                  main window (tabs Index / Ask / Status / Settings)
 ├── web.py                  web interface on localhost (see "Web interface")
 ├── start.bat / start.sh    starts app.py (Windows / Linux, macOS); start_web.bat / "sh start.sh web": web interface
 ├── index.py                indexing from the command line
 ├── ask.py                  questions from the command line
 ├── docker-compose.yml      Elasticsearch + Tika (localhost only)
 ├── .env.example            template of the configuration (no secrets)
+├── pyproject.toml          pip package (commands docsearch, docsearch-web, ...)
+├── CHANGELOG.md            what changed in which version
 ├── docsearch/
+│   ├── gui.py, web_cli.py, index_cli.py, ask_cli.py   the programs behind app.py, web.py, index.py, ask.py
+│   ├── data/               packaged copies of docker-compose.yml and .env.example (a test keeps them identical)
 │   ├── config.py           .env + environment variables, local addresses only
+│   ├── preferences.py      the settings that can be edited in the window and the web page
+│   ├── health.py           status report (services, memory, disk, model context)
+│   ├── conversations.py    saved conversations and Markdown export
 │   ├── es.py               Elasticsearch client and index mapping
 │   ├── llm.py              LLM clients: local (OpenAI-compatible) and cloud (Anthropic)
 │   ├── cloud_policy.py     per-index approval for the cloud (cloud_indices.json)
@@ -380,6 +405,7 @@ docsearch/
 │   ├── ui_common.py        settings, log forwarding
 │   ├── ui_index.py         window: tab Index
 │   ├── ui_chat.py          window: tab Ask
+│   ├── ui_status.py        window: tabs Status and Settings
 │   ├── webserver.py        web interface: server, API, security checks
 │   └── static/             web interface: index.html, app.css, app.js
 └── tests/                  unit tests (no running services, cloud against a mock server)
