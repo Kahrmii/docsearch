@@ -125,11 +125,10 @@ class FakeEs:
         return len([d for d in self.docs if d["_id"] not in self.updates])
 
     def scan(self, index, query, fields, limit, page=100, should_stop=None):
-        for doc in self.docs[:limit]:
+        for doc in [d for d in self.docs if d["_id"] not in self.updates][:limit]:
             if should_stop and should_stop():
                 return
-            if doc["_id"] not in self.updates:
-                yield doc
+            yield doc
 
     def bulk_update(self, index, updates):
         self.updates.update(dict(updates))
@@ -162,6 +161,24 @@ class JobTest(ServerTestCase):
         es = FakeEs([doc("a", "some words " * 50)])
         embed_job.embed_index(es, "x")
         self.assertEqual(embed_job.embed_index(es, "x")["total"], 0)
+
+    def test_a_scan_that_ends_early_is_repeated_for_the_documents_left(self):
+        class EarlyEnd(FakeEs):
+            passes = 0
+
+            def scan(self, index, query, fields, limit, page=100, should_stop=None):
+                self.passes += 1
+                for i, d in enumerate(super().scan(index, query, fields, limit, page, should_stop)):
+                    if self.passes == 1 and i >= 3:
+                        return  # the first pass stops after 3 documents, like the real one did
+                    yield d
+
+        self.serve()
+        es = EarlyEnd([doc(str(i), "text " * 40) for i in range(8)])
+        stats = embed_job.embed_index(es, "x", batch_size=1)
+        self.assertEqual(stats["ok"], 8)
+        self.assertEqual(len(es.updates), 8)
+        self.assertEqual(es.passes, 2)
 
     def test_limit_and_stop(self):
         self.serve()

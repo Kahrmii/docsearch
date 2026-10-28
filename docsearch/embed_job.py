@@ -53,25 +53,41 @@ def embed_index(es, index, on_progress=None, should_stop=None, batch_size=8, lim
         total = min(total, limit)
     stats = {"total": total, "ok": 0, "empty": 0, "errors": 0, "seconds": 0, "stopped": False}
     log.info("%d documents without vectors in '%s' (%d dimensions)", total, index, dims)
-    start, state, pending = time.time(), {"in_a_row": 0}, []
+    start, state = time.time(), {"in_a_row": 0}
+
+    def processed():
+        return stats["ok"] + stats["empty"] + stats["errors"]
 
     def report():
-        done = stats["ok"] + stats["empty"] + stats["errors"]
+        done = processed()
         rate = done / max(time.time() - start, 1e-9)
         on_progress({"done": done, "total": total, "ok": stats["ok"], "errors": stats["errors"],
                      "skipped": stats["empty"], "rate": rate, "eta_s": (total - done) / rate if rate else None})
         log.info("Documents %d/%d | ok %d | no text %d | errors %d | %.1f documents/s",
                  done, total, stats["ok"], stats["empty"], stats["errors"], rate)
 
-    for hit in es.scan(index, query, ["content"], total, page=batch_size, should_stop=should_stop):
-        pending.append(hit)
-        if len(pending) >= batch_size:
+    def one_pass(room):
+        pending = []
+        for hit in es.scan(index, query, ["content"], room, page=batch_size, should_stop=should_stop):
+            pending.append(hit)
+            if len(pending) >= batch_size:
+                _flush(es, index, pending, stats, state)
+                pending = []
+                report()
+        if pending and not should_stop():
             _flush(es, index, pending, stats, state)
-            pending = []
             report()
-    if pending and not should_stop():
-        _flush(es, index, pending, stats, state)
-        report()
+
+    while True:
+        before = processed()
+        one_pass(total - before)
+        if should_stop() or processed() >= total:
+            break
+        # The scan ended although documents are left (seen once on a real index: "Done" at 85 of 128): look again.
+        es.call("POST", f"/{index}/_refresh")
+        if processed() == before or es.count(index, query) == 0:
+            break
+        log.warning("The scan ended early, %d documents are left; going over them again.", total - processed())
     stats["stopped"] = should_stop()
     es.call("POST", f"/{index}/_refresh")
     stats["seconds"] = time.time() - start

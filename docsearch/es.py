@@ -115,18 +115,20 @@ class Es:
 
     def indices(self):
         """[(index name, document count)] without system indices."""
-        rows = self.call("GET", "/_cat/indices?format=json&h=index,docs.count")
-        return sorted((r["index"], int(r["docs.count"] or 0)) for r in rows if not r["index"].startswith("."))
+        rows = self.call("GET", "/_cat/indices?format=json&h=index")
+        # _cat's docs.count also counts the nested chunks of the vectors, so count the real documents
+        return sorted((r["index"], self.count(r["index"], {"match_all": {}}))
+                      for r in rows if not r["index"].startswith("."))
 
     def index_info(self, index):
         """{"documents": n, "size_mb": n} of an index, or None if it does not exist."""
         try:
-            rows = self.call("GET", f"/_cat/indices/{index}?format=json&h=docs.count,store.size&bytes=mb")
+            rows = self.call("GET", f"/_cat/indices/{index}?format=json&h=store.size&bytes=mb")
         except EsError as e:
             if e.status == 404:
                 return None
             raise
-        return {"documents": int(rows[0]["docs.count"] or 0), "size_mb": int(float(rows[0]["store.size"] or 0))}
+        return {"documents": self.count(index, {"match_all": {}}), "size_mb": int(float(rows[0]["store.size"] or 0))}
 
     def delete_index(self, index):
         """Delete one index by its exact name. Wildcards and lists are refused."""
