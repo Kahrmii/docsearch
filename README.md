@@ -32,7 +32,9 @@ Indexing, searching and counting always run locally; there is no telemetry. Pyth
 17. [Troubleshooting](#troubleshooting)
 18. [Project structure and tests](#project-structure-and-tests)
 19. [Limitations](#limitations)
-19. [License](#license)
+20. [License](#license)
+
+Also: [Mailboxes (mbox)](#mailboxes-mbox), [Semantic search](#semantic-search-optional), [Deleting an index](#deleting-an-index).
 
 ## Features
 - **Agent instead of fixed question types:** the model chooses and combines tools itself, also over several steps.
@@ -42,8 +44,9 @@ Indexing, searching and counting always run locally; there is no telemetry. Pyth
 - **Exact numbers:** counting and ranking are done by Elasticsearch or plain code.
 - **Mailboxes (mbox):** every mail becomes a document with sender, recipients, date and subject; the agent filters and counts by them.
 - **Checked answers:** a source quoted as `[file name]` that appears in no search result gets a warning.
-- **Source preview** (the matching passages, marked) and **saved conversations** with Markdown export.
-- **Status tab** (Docker memory, disk, loaded model and its context) and **Settings tab** (models, OCR language, workers) in the window and the web page.
+- **Source preview** (the matching passages, marked; one click shows the full text) and **saved conversations** with Markdown export.
+- **Status tab** (Docker memory, disk, loaded model and its context; in the web page also an overview of all indices) and **Settings tab** (models, OCR language, workers) in the window and the web page.
+- **Live progress in the web page:** indexing and embedding jobs show a progress bar on every tab, also after a reload.
 - **Duplicates** (same file content, same mail) are indexed only once.
 - **Semantic search (optional, per index):** finds passages by meaning ("ending a contract" also finds "cancellation") with a local embedding model; see [Semantic search](#semantic-search-optional).
 - **Installable** with `pip install git+https://github.com/Kahrmii/docsearch.git`.
@@ -96,7 +99,7 @@ The indexer runs directly on the host and sends every file to Tika over HTTP. Th
 | What | Note |
 |---|---|
 | Docker Desktop (or Docker Engine + Compose v2) | for Tika and Elasticsearch |
-| Python 3.9 or newer | standard library only; `tkinter` for the window (included with Windows Python) |
+| Python 3.10 or newer | standard library only; `tkinter` for the window (included with Windows Python) |
 | RAM | at least 16 GB recommended (Elasticsearch about 6 GB, Tika about 4 GB) |
 | Language model for the questions (one of the two) | **local:** OpenAI-compatible server **with tool calling**, e.g. LM Studio or Ollama, with a model that can call tools (e.g. Qwen3-14B) – **or cloud:** an Anthropic API key, see [Cloud mode](#cloud-mode) |
 
@@ -127,7 +130,7 @@ If your documents are not English, set `OCR_LANGUAGES` (e.g. `deu+eng`) and `TEX
 
 ## Web interface
 
-Prefer the browser? `start_web.bat` (Windows) or `sh start.sh web` (Linux/macOS) – or `python web.py` – starts a small server on **localhost only** and opens the page. It offers the same functions as the window (the window stays available): tab **Ask** with conversation, tool steps, clickable sources, model choice and the cloud approval with the keys/credentials warning, and tab **Index** with folder, index name, progress, log and **Delete index ...** (see [Deleting an index](#deleting-an-index)). "Browse ..." opens the folder dialog of your computer.
+Prefer the browser? `start_web.bat` (Windows) or `sh start.sh web` (Linux/macOS) – or `python web.py` – starts a small server on **localhost only** and opens the page. It offers the same functions as the window (the window stays available): tab **Ask** with conversation, tool steps, clickable sources, model choice and the cloud approval with the keys/credentials warning, and tab **Index** with folder, index name, progress, log, **Create embeddings** (see [Semantic search](#semantic-search-optional)) and **Delete index ...** (see [Deleting an index](#deleting-an-index)). "Browse ..." opens the folder dialog of your computer. The tabs **Status** (services, memory, model and a table of all indices with document counts, size and vector coverage) and **Settings** are there as well. A running indexing or embedding job shows its progress bar above all tabs; after a reload the page picks it up again. Only jobs started from the web page are shown; jobs started in the window or on the command line run in separate processes.
 
 ```bash
 python web.py                  # default port 8765 (next free port if busy)
@@ -159,7 +162,7 @@ Security of the web interface:
 - **Model:** "Local (LM Studio)" or "Claude (cloud)". Cloud works only if **"Allow cloud for this index"** is ticked; otherwise nothing is sent. Switching index or model automatically starts a new conversation. The status line names the model in use.
 - **Sources** in square brackets are **clickable**: a click opens the file (known document types) or shows it in the file explorer.
 - **Stop** cancels a running analysis.
-- **Source preview:** the web page opens a **preview** of the passages around the searched words (marked) with an "Open file" button; the window opens the same preview in a small window.
+- **Source preview:** the web page opens a **preview** of the passages around the searched words (marked) with an "Open file" button; the window opens the same preview in a small window. **Show full text** displays the whole document (at most 200,000 characters), **Show passages** goes back. For a mail from an mbox file this is the way to read the single mail, because "Open file" opens the whole mailbox file.
 - **Saved conversations:** every answer is stored in `conversations/` (ignored by git; it contains your questions and the answers, which may quote your documents). Web: "Saved conversations" with Open, Rename, Delete and **Export this conversation (.md)**; window: **History ...** and **Export ...**. The Markdown file lists questions, answers and the cited file names (no paths). The setting "Save conversations" switches the storing off.
 
 **Tab "Status"** shows whether Elasticsearch and Tika answer, how full their containers and the disk are, which model is loaded in LM Studio and how large its context is (a small context cuts answers short), and whether a cloud key is set (never shown). The same report: `python -m docsearch.health`.
@@ -174,6 +177,10 @@ python index.py "D:\Archive" --recursive                       # index "document
 python index.py "D:\Archive" --index project_a --recursive
 python index.py "D:\Archive" --limit 200 --random              # sample for testing
 python index.py "D:\Archive" --dry-run                         # only count
+
+# semantic search: create the vectors of an already indexed index (see "Semantic search")
+python index.py --index documents --embed --limit 500          # first test with 500 documents
+python index.py --index documents --embed                      # all documents without vectors
 
 # ask
 python ask.py "How many documents are there per file type?"
@@ -198,6 +205,9 @@ Parameters of `index.py`:
 | `--max-chars N` | truncate text per document (`content_truncated=true`) | `10000000` |
 | `--max-file-mb N` | skip larger files and name them in the log (`0` = no limit) | `100` |
 | `--skip-failed` | do not retry files that failed before | off |
+| `--keep-duplicates` | index files and mails with content that is already in the index | off |
+| `--embed` | create vectors for the index instead of indexing files | off |
+| `--retry-failed` | with `--embed`: retry documents whose embedding failed before | off |
 | `--dry-run` | only count | off |
 
 ## How the agent works
@@ -263,12 +273,14 @@ An **mbox** file is a mailbox stored as one big text file with all messages one 
 
 The normal search finds the words you type. The **semantic search** finds passages about a topic even if the words differ. It is optional and per index, and everything stays on your computer.
 
+**Order:** first index the documents, then create the embeddings. The vectors are made from the text that is already in the index, so there is nothing to embed before indexing. Documents added later have no vectors until you run **Create embeddings** again; it only processes those.
+
 1. In LM Studio, download and **load an embedding model** (default `text-embedding-nomic-embed-text-v1.5`; another one: `EMBED_MODEL` in `.env` or the Settings tab). It runs next to the chat model; mind your video memory (the nomic model is small), and note that LM Studio may unload the chat model when it is set to keep only one model loaded.
 2. Create the vectors: tab **Index** → index name → **Create embeddings for this index** (window and web page), or `python index.py --index documents --embed`. Every document is cut into chunks of about 1,500 characters (the first 24 chunks per document, `EMBED_CHUNK_CHARS` / `EMBED_MAX_CHUNKS`), and each chunk gets a vector, stored in the document itself. The job can be stopped and continues where it stopped; only documents without vectors are processed. `--retry-failed` retries documents that failed, `--limit N` creates vectors for N documents only (a good first test).
 3. Ask as usual. For an index with vectors the agent gets the extra tool `semantic_search` (and uses it together with the exact-word tools). Without vectors the tool does not exist.
 
 Facts to know:
-- **Size and time:** a 768-dimensional vector per chunk takes about 3 KB in the index; 50,000 documents of 14 KB each (about 10 chunks) add roughly 2 GB, and creating them takes hours on a GPU that also runs the chat model. Try `--limit 500` first.
+- **Size and time:** a 768-dimensional vector per chunk takes about 3 KB in the index; 50,000 documents of 14 KB each (about 10 chunks) add roughly 2 GB, and creating them takes hours on a GPU that also runs the chat model. Try `--limit 500` first. A real example: 421,000 mails took an estimated 28 hours (about 4 documents per second). To speed up: unload the chat model in LM Studio while the job runs, lower `EMBED_MAX_CHUNKS` (the start of a mail is usually the important part) or raise `EMBED_CHUNK_CHARS`. Changed values apply only to documents that have no vectors yet, so an index can end up mixed; that does no harm to the search.
 - **Same model for creating and asking.** The vector size is fixed when the first vectors are stored; another model is refused (or: delete the index and start again). Vectors of different models cannot be compared.
 - The semantic search **always returns the nearest passages**, even when nothing really fits; the agent is told to judge the similarity and the excerpts. It is good for topics and paraphrases, weak for exact names, numbers and codes: use the normal search for those.
 - Documents indexed later (new files) have no vectors until you run **Create embeddings** again.
@@ -286,6 +298,9 @@ On the first run the index is created with 1 shard, 0 replicas and `refresh_inte
 | `content_length`, `content_truncated` | long, boolean | length, truncated or not |
 | `content_type`, `author`, `created`, `page_count`, `language` | keyword/integer | selected Tika metadata |
 | `indexed_at` | date | time of indexing |
+| `content_hash` | keyword | SHA-256 of the file (of the Message-ID for mails), used to skip duplicates |
+| `ocr_pages` | integer | number of PDF pages that needed OCR |
+| `embedded_chunks`, `chunks` | integer, nested | only with semantic search: number of embedded chunks (0 = no text, -1 = failed) and per chunk its start position and vector |
 | `metadata` | object (not indexed) | all Tika metadata, stored in `_source` only |
 | `mail_from`, `mail_to`, `mail_cc`, `mail_subject`, `mail_date`, `mail_message_id`, `mail_folder`, `mail_attachments`, `mail_attachment_names` | keyword/date/integer | only for mails from an mbox file, see [Mailboxes (mbox)](#mailboxes-mbox) |
 
@@ -385,6 +400,9 @@ Safeguards: only plain index names are accepted (no wildcards, lists, `_all` or 
 | Answers extremely slow (about 5 tokens/s) | the model does not fit completely into video memory, see [Performance](#performance-and-storage) |
 | Elasticsearch does not start | Linux: raise `vm.max_map_count`; Windows: check `ES_HEAP`/`ES_MEM_LIMIT` and the WSL memory limit |
 | No hit although the name occurs | the spelling is searched as a phrase; "Doe, Jane" and "Jane Doe" are different. Name the variant |
+| Embeddings fail right at the start (model not loaded, connection error) | load the embedding model in LM Studio (the name must match `EMBED_MODEL`); the Status tab shows whether it is loaded |
+| Embeddings: vector size refused | the index already holds vectors of another model; use the same model or delete the index and start again |
+| Embeddings take very long | see "Size and time" in [Semantic search](#semantic-search-optional); the job can be stopped and continues later |
 | OCR finds little text | scan quality; set `OCR_LANGUAGES` to the language of the documents (the language pack must exist in the Tika image) |
 
 ## Project structure and tests
@@ -436,7 +454,7 @@ python -m unittest discover -s tests -t .
 
 ## Limitations
 
-- **Keyword search, not semantic search:** "termination" does not automatically find "ending of the contract". An extension with embeddings is possible but enlarges the index and the compute time a lot.
+- **Keyword search by default:** "termination" does not automatically find "ending of the contract". Semantic search fixes this but is optional, because the vectors enlarge the index and creating them takes hours (see [Semantic search](#semantic-search-optional)).
 - **Attachments and archives:** embedded files (email attachments, ZIP contents) are not stored as documents of their own; only the text of the main file goes into the index. For mails from an mbox file the attachments are skipped as well (their names are recorded).
 - **Quality of the source:** scans without good OCR hits, handwriting, tables inside images, protected or damaged files yield little or no text.
 - **Statements about very many documents:** "Summarise everything about X" works only approximately; the agent evaluates the best hits, not every document.
