@@ -2,7 +2,7 @@
 
 All notable changes. The version is in `docsearch/__init__.py` (`python web.py --version`).
 
-## Unreleased
+## 0.8.1
 
 - Web: index overview in the Status tab and a job progress bar on every tab (also after a reload).
 - Source preview: "Show full text" in the window and the web page (needed to read a single mail of an mbox file).
