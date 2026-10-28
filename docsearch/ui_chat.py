@@ -263,17 +263,29 @@ class ChatTab(ttk.Frame):
         bar.pack(fill="x")
         ttk.Label(bar, text=f"{preview['length']} characters of text").pack(side="left")
         ttk.Button(bar, text="Open file", command=lambda: files.open_source(path)).pack(side="right")
+        toggle = ttk.Button(bar, text="Show full text")
+        toggle.pack(side="right", padx=4)
         box = tk.Text(window, wrap="word", font=("Segoe UI", 10), padx=8, pady=6)
         box.pack(fill="both", expand=True)
         box.tag_configure("hit", background="#ffe066", foreground="#1d2330")
         terms = [t for t in preview["terms"] if t]
         pattern = re.compile("(" + "|".join(re.escape(t) for t in terms) + ")", re.I) if terms else None
-        for passage in preview["passages"]:
-            box.insert("end", "… ")
-            for i, piece in enumerate(pattern.split(passage) if pattern else [passage]):
-                box.insert("end", piece, "hit" if i % 2 else "")
-            box.insert("end", " …\n\n")
-        box.configure(state="disabled")
+
+        def fill(full):
+            data = self.session.preview(name, full=full) or preview
+            toggle.configure(text="Show passages" if full else "Show full text",
+                             command=lambda: fill(not full))
+            box.configure(state="normal")
+            box.delete("1.0", "end")
+            for passage in data["passages"]:
+                if not full:
+                    box.insert("end", "… ")
+                for i, piece in enumerate(pattern.split(passage) if pattern else [passage]):
+                    box.insert("end", piece, "hit" if i % 2 else "")
+                box.insert("end", "\n" if full else " …\n\n")
+            box.configure(state="disabled")
+
+        fill(False)
 
     # ---- Send a question
     def send(self):

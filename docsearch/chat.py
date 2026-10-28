@@ -7,6 +7,8 @@ from . import agent, config, conversations, llm, tools
 
 log = logging.getLogger("docsearch.chat")
 
+FULL_PREVIEW_CHARS = 200_000  # the "show full text" preview stops here, so a huge document cannot freeze the page
+
 
 def cited_sources(answer, known):
     """Names of known sources that the answer quotes in [square brackets], in order."""
@@ -75,10 +77,11 @@ class ChatSession:
                 self.terms.append(term.strip())
         del self.terms[:-20]
 
-    def preview(self, filename, width=900, limit=4):
+    def preview(self, filename, width=900, limit=4, full=False):
         """The passages of a source that match what was searched, or None if it is not a known source.
 
-        Returns {"filename", "terms", "passages", "length"}. Reads the document from the index of the last question;
+        Returns {"filename", "terms", "passages", "length", "full"}. With full=True the passages are the whole text
+        (at most FULL_PREVIEW_CHARS characters). Reads the document from the index of the last question;
         nothing leaves the computer."""
         path = self.sources.get(filename)
         if path is None or self.last_target is None:
@@ -90,8 +93,9 @@ class ChatSession:
         if not hits:
             return None
         text = hits[0]["_source"].get("content") or ""
-        return {"filename": filename, "terms": list(self.terms), "length": len(text),
-                "passages": tools.windows(text, self.terms, width, limit)}
+        passages = [text[:FULL_PREVIEW_CHARS]] if full else tools.windows(text, self.terms, width, limit)
+        return {"filename": filename, "terms": list(self.terms), "length": len(text), "full": full,
+                "passages": passages}
 
     def switch_target(self, index, provider):
         """Drop the history when the index or the model changed. It contains text excerpts of the previous target

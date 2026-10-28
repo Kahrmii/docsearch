@@ -149,6 +149,17 @@ class PreviewTest(SessionTest):
         self.assertEqual(index, "documents")
         self.assertEqual(body["query"]["bool"]["filter"][1], {"term": {"path": "C:/docs/a.pdf"}})
 
+    def test_full_preview_returns_the_whole_text_up_to_the_limit(self):
+        session = self.make()
+        self.ask(session)
+        short = session.preview("a.pdf")
+        full = session.preview("a.pdf", full=True)
+        self.assertTrue(full["full"])
+        self.assertFalse(short["full"])
+        self.assertEqual(len(full["passages"]), 1)
+        self.assertEqual(full["passages"][0], full["passages"][0][:chat.FULL_PREVIEW_CHARS])
+        self.assertEqual(len(full["passages"][0]), min(full["length"], chat.FULL_PREVIEW_CHARS))
+
     def test_unknown_files_have_no_preview_and_cause_no_query(self):
         session = self.make()
         self.ask(session)

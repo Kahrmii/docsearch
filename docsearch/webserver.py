@@ -345,7 +345,8 @@ def api_chat_reset(state, query, body):
 def api_preview(state, query, body):
     chat = state.chats.get(query.get("chat_id", ""))
     try:
-        preview = chat.session.preview(query.get("filename", "")) if chat else None
+        preview = (chat.session.preview(query.get("filename", ""), full=query.get("full") == "1")
+                   if chat else None)
     except (EsError, SystemExit, OSError) as e:
         return 502, {"error": f"Elasticsearch is not reachable: {e}"}
     if preview is None:

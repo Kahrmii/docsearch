@@ -280,17 +280,24 @@
     });
   }
 
-  async function previewSource(filename) {
-    const res = await api("/api/preview?chat_id=" + encodeURIComponent(chatId) + "&filename=" + encodeURIComponent(filename));
+  async function previewSource(filename, full) {
+    const res = await api("/api/preview?chat_id=" + encodeURIComponent(chatId) + "&filename=" + encodeURIComponent(filename)
+      + (full ? "&full=1" : ""));
     if (!res.ok) { line("error", res.data.error || "No preview available."); return; }
     previewName = filename;
     $("preview-title").textContent = filename;
-    $("preview-note").textContent = res.data.length + " characters of text";
+    const shown = full ? res.data.passages[0].length : 0;
+    $("preview-note").textContent = res.data.length + " characters of text"
+      + (full && shown < res.data.length ? " (first " + shown + " shown)" : "");
+    $("preview-full").textContent = full ? "Show passages" : "Show full text";
+    $("preview-full").onclick = () => previewSource(filename, !full);
+    $("preview-body").style.maxHeight = full ? "65vh" : "";
     $("preview-body").replaceChildren(...res.data.passages.map((passage) => {
       const p = document.createElement("p");
-      p.append(document.createTextNode("… "));
+      if (full) p.className = "full";
+      else p.append(document.createTextNode("… "));
       markTerms(p, passage, res.data.terms);
-      p.append(document.createTextNode(" …"));
+      if (!full) p.append(document.createTextNode(" …"));
       return p;
     }));
     $("preview").hidden = false;
