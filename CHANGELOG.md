@@ -2,6 +2,13 @@
 
 All notable changes. The version is in `docsearch/__init__.py` (`python web.py --version`).
 
+## 0.8.2
+
+- Embeddings: if the scan over the documents ends early (seen once: "Done" at 85 of 128), the job goes over the
+  documents that are left again instead of reporting a finished run.
+- Index lists and the delete warning show the real number of documents; the nested vector chunks are no longer counted.
+- `fix_docker.bat` / `fix_docker.py` (Windows): removes the stale socket files that keep Docker Desktop from starting.
+
 ## 0.8.1
 
 - Web: index overview in the Status tab and a job progress bar on every tab (also after a reload).
