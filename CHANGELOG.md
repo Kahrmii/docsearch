@@ -7,6 +7,8 @@ All notable changes. The version is in `docsearch/__init__.py` (`python web.py -
 - Embeddings: if the scan over the documents ends early (seen once: "Done" at 85 of 128), the job goes over the
   documents that are left again instead of reporting a finished run.
 - Index lists and the delete warning show the real number of documents; the nested vector chunks are no longer counted.
+- Packaging: SPDX license field (the old table form is deprecated), data folders declared as packages, project URLs;
+  a tag `vX.Y.Z` builds the wheel and the source archive and publishes a GitHub release (`.github/workflows/release.yml`).
 - `fix_docker.bat` / `fix_docker.py` (Windows): removes the stale socket files that keep Docker Desktop from starting.
 
 ## 0.8.1

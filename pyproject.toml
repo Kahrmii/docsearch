@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,8 +8,13 @@ dynamic = ["version"]
 description = "Index documents with Apache Tika into Elasticsearch and question them with a local or cloud LLM"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = []   # standard library only; Docker is needed for Tika and Elasticsearch
+
+[project.urls]
+Homepage = "https://github.com/Kahrmii/docsearch"
+Changelog = "https://github.com/Kahrmii/docsearch/blob/main/CHANGELOG.md"
 
 [project.scripts]
 docsearch-web = "docsearch.web_cli:main"
@@ -21,10 +26,11 @@ docsearch-health = "docsearch.health:main"
 docsearch = "docsearch.gui:main"
 
 [tool.setuptools]
-packages = ["docsearch"]
+packages = ["docsearch", "docsearch.static", "docsearch.data"]
 
 [tool.setuptools.dynamic]
 version = { attr = "docsearch.__version__" }
 
 [tool.setuptools.package-data]
-docsearch = ["static/*", "data/*"]
+"docsearch.static" = ["*"]
+"docsearch.data" = ["*"]
