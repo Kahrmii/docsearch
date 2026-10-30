@@ -19,9 +19,9 @@ __pycache__/
 *.pyc
 .venv/
 
-# Never commit raw data or exports
-data/
-documents/
+# Never commit raw data or exports (only in the project root: docsearch/data/ holds the packaged templates)
+/data/
+/documents/
 *.vhdx
 *.tar
 *.zip
